@@ -28,8 +28,8 @@
   - Keyboard movement mapped to isometric axes; jumping placeholder.
   - Simple axis-aligned collision against floor bounds + one block.
 - [ ] **M2 — Room System**
-  - JSON room loader; convert tiles to instances and collision volumes.
-  - Doorway definitions and room switching placeholder hooks.
+  - [x] JSON room loader; convert tiles to instances and collision volumes.
+  - [x] Doorway definitions and room switching placeholder hooks.
 - [ ] **M3 — Interactions**
   - Implement pushable crate with constraints and simple physics.
   - Falling behaviour for unsupported objects.

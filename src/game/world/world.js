@@ -39,14 +39,16 @@ export class World {
     this.spawnPoint = new Vector3(0, 0.8, 0);
     this._scratchBox = new Box3();
     this._halfSize = new Vector3();
+    this.doorways = [];
   }
 
   loadRoom(roomBuilder) {
     this.roomGroup.clear();
     this.colliders = [];
-    const { meshes = [], colliders = [], spawnPoint } = roomBuilder();
+    const { meshes = [], colliders = [], spawnPoint, doorways = [] } = roomBuilder();
     meshes.forEach((mesh) => this.roomGroup.add(mesh));
     this.colliders.push(...colliders.map((item) => normalizeCollider(item)));
+    this.doorways = doorways;
     if (spawnPoint) {
       this.spawnPoint.copy(spawnPoint);
     }
@@ -111,5 +113,9 @@ export class World {
     integrateAxis("z");
 
     entity.position.copy(position);
+  }
+
+  getDoorways() {
+    return this.doorways;
   }
 }
