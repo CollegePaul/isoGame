@@ -1,4 +1,5 @@
 import { Box3, Vector3 } from "three";
+import { CollisionLayer } from "../physics/collisionGroups.js";
 
 const PLAYER_SIZE = new Vector3(0.8, 1.6, 0.8);
 const MOVE_SPEED = 4;
@@ -13,6 +14,8 @@ export class Player {
     this.onGround = false;
     this.input = input;
     this.spawn = position.clone();
+    this.moveDirection = new Vector3();
+    this.collisionMask = CollisionLayer.STATIC;
   }
 
   update(delta, world) {
@@ -50,6 +53,7 @@ export class Player {
       impulse.normalize();
     }
 
+    this.moveDirection.copy(impulse);
     return impulse;
   }
 
@@ -77,5 +81,13 @@ export class Player {
 
   setPosition(position) {
     this.position.copy(position);
+  }
+
+  getMoveDirection() {
+    return this.moveDirection.clone();
+  }
+
+  getHalfSize() {
+    return this.getSize().multiplyScalar(0.5);
   }
 }

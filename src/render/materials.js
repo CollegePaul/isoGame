@@ -34,6 +34,14 @@ const materialRegistry = new Map([
     }),
   ],
   [
+    "crate",
+    new MeshStandardMaterial({
+      color: 0xb5835a,
+      metalness: 0.05,
+      roughness: 0.7,
+    }),
+  ],
+  [
     "default",
     new MeshStandardMaterial({
       color: 0xcccccc,

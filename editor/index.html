@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VR Isometric Game Editor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #10131a;
+        --panel: #1b2230;
+        --accent: #4c8bf5;
+        --text: #f4f6ff;
+        --text-muted: #9ea8c0;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        height: 100%;
+      }
+
+      #viewport {
+        position: relative;
+        background: #0c1018;
+      }
+
+      .panel {
+        background: var(--panel);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        border-left: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      h1 {
+        font-size: 18px;
+        margin: 0;
+      }
+
+      fieldset {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      legend {
+        padding: 0 8px;
+        color: var(--text-muted);
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      select,
+      input,
+      button,
+      textarea {
+        width: 100%;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        border: none;
+        font-weight: 600;
+      }
+
+      button.secondary {
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      textarea {
+        min-height: 140px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 6px;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <div id="viewport"></div>
+      <aside class="panel">
+        <div>
+          <h1>Room Editor</h1>
+          <p class="hint">
+            Click on tiles to place items. Use right click or the eraser tool to remove. Hold Shift while dragging the mouse to rotate the camera.
+          </p>
+        </div>
+
+        <fieldset>
+          <legend>Tool</legend>
+          <label>
+            Item
+            <select id="tool-select">
+              <option value="block-1">Solid Block (1 high)</option>
+              <option value="block-2">Solid Block (2 high)</option>
+              <option value="crate">Crate</option>
+              <option value="player">Player Spawn</option>
+              <option value="erase">Eraser</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Grid</legend>
+          <label>
+            Width
+            <input type="number" id="grid-width" min="4" max="16" value="8" />
+          </label>
+          <label>
+            Depth
+            <input type="number" id="grid-depth" min="4" max="16" value="8" />
+          </label>
+          <button class="secondary" id="apply-grid">Apply Grid Size</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Export</legend>
+          <button id="export-room">Export Room JSON</button>
+          <div class="hint">
+            After exporting, copy the JSON into <code>src/data/rooms/</code>. The room is compatible with the runtime loader.
+          </div>
+          <textarea id="export-output" readonly></textarea>
+        </fieldset>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/editor/main.js"></script>
+  </body>
+</html>

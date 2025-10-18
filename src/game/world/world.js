@@ -1,6 +1,6 @@
 import { Box3, Group, Vector3 } from "three";
-
-const EPSILON = 1e-4;
+import { resolveCollisions } from "../physics/collisionWorld.js";
+import { defaultColliderMask } from "../physics/collisionGroups.js";
 
 const normalizeCollider = (raw) => {
   let box;
@@ -23,10 +23,13 @@ const normalizeCollider = (raw) => {
     }
   });
 
+  const mask = raw.mask ?? defaultColliderMask;
+
   return {
     ...raw,
     box,
     axisMask,
+    mask,
   };
 };
 
@@ -34,88 +37,42 @@ export class World {
   constructor({ scene }) {
     this.scene = scene;
     this.roomGroup = new Group();
+    this.dynamicGroup = new Group();
     this.scene.add(this.roomGroup);
+    this.scene.add(this.dynamicGroup);
     this.colliders = [];
     this.spawnPoint = new Vector3(0, 0.8, 0);
-    this._scratchBox = new Box3();
-    this._halfSize = new Vector3();
     this.doorways = [];
   }
 
   loadRoom(roomBuilder) {
     this.roomGroup.clear();
+    this.dynamicGroup.clear();
     this.colliders = [];
-    const { meshes = [], colliders = [], spawnPoint, doorways = [] } = roomBuilder();
+    const builtRoom = roomBuilder();
+    const { meshes = [], colliders = [], spawnPoint, doorways = [] } = builtRoom;
     meshes.forEach((mesh) => this.roomGroup.add(mesh));
     this.colliders.push(...colliders.map((item) => normalizeCollider(item)));
     this.doorways = doorways;
     if (spawnPoint) {
       this.spawnPoint.copy(spawnPoint);
     }
+    return builtRoom;
   }
 
   resolveCollisions(entity, delta) {
-    const size = entity.getSize();
-    const half = this._halfSize.copy(size).multiplyScalar(0.5);
-    const position = entity.position.clone();
-    const colliders = this.colliders;
-    const box = this._scratchBox;
-
-    const integrateAxis = (axis) => {
-      const velocityComponent = entity.velocity[axis];
-      if (velocityComponent === 0) {
-        return;
-      }
-
-      position[axis] += velocityComponent * delta;
-      box.setFromCenterAndSize(position, size);
-
-      for (const collider of colliders) {
-        if (!collider.axisMask[axis]) {
-          continue;
-        }
-
-        if (!box.intersectsBox(collider.box)) {
-          continue;
-        }
-
-        const colliderBox = collider.box;
-        if (axis === "y") {
-          if (velocityComponent > 0) {
-            position.y = colliderBox.min.y - half.y - EPSILON;
-          } else {
-            position.y = colliderBox.max.y + half.y + EPSILON;
-            entity.onGround = true;
-          }
-          entity.velocity.y = 0;
-        } else if (axis === "x") {
-          if (velocityComponent > 0) {
-            position.x = colliderBox.min.x - half.x - EPSILON;
-          } else {
-            position.x = colliderBox.max.x + half.x + EPSILON;
-          }
-          entity.velocity.x = 0;
-        } else if (axis === "z") {
-          if (velocityComponent > 0) {
-            position.z = colliderBox.min.z - half.z - EPSILON;
-          } else {
-            position.z = colliderBox.max.z + half.z + EPSILON;
-          }
-          entity.velocity.z = 0;
-        }
-
-        box.setFromCenterAndSize(position, size);
-      }
-    };
-
-    integrateAxis("y");
-    integrateAxis("x");
-    integrateAxis("z");
-
-    entity.position.copy(position);
+    resolveCollisions(entity, this.colliders, delta);
   }
 
   getDoorways() {
     return this.doorways;
+  }
+
+  clearDynamicMeshes() {
+    this.dynamicGroup.clear();
+  }
+
+  addDynamicMesh(mesh) {
+    this.dynamicGroup.add(mesh);
   }
 }

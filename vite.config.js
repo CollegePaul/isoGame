@@ -1,10 +1,16 @@
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 
+const useHttps = process.env.VITE_USE_HTTPS === "true";
+
 export default defineConfig({
-  plugins: [basicSsl()],
+  plugins: useHttps ? [basicSsl()] : [],
   server: {
-    https: true,
+    https: useHttps,
+    host: true,
+  },
+  preview: {
+    https: useHttps,
   },
   build: {
     target: "esnext",

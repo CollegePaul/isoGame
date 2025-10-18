@@ -31,16 +31,16 @@
   - [x] JSON room loader; convert tiles to instances and collision volumes.
   - [x] Doorway definitions and room switching placeholder hooks.
 - [ ] **M3 — Interactions**
-  - Implement pushable crate with constraints and simple physics.
-  - Falling behaviour for unsupported objects.
-  - Inventory and trigger system (e.g. screwdriver fixes lift).
+  - [x] Implement pushable crate with constraints and simple physics.
+  - [ ] Falling behaviour for unsupported objects.
+  - [ ] Inventory and trigger system (e.g. screwdriver fixes lift).
 - [ ] **M4 — Polishing Pass**
   - HUD overlay for score/items, basic animations, lighting polish.
   - WebXR session toggle; confirm desktop & VR camera pipeline.
   - Save/load snapshot serialization tests.
 - [ ] **Stretch — Map Editor**
-  - Separate `editor/` bundle using shared data schema.
-  - Block palette UI, 3D placement with snapping, export to JSON.
+  - [x] Separate `editor/` bundle using shared data schema.
+  - [x] Block palette UI, 3D placement with snapping, export to JSON.
 
 ### Testing Strategy
 - Unit tests for collision solver, movement edge cases, room loader.
@@ -48,5 +48,5 @@
 - Manual VR test checklist maintained in repo.
 
 ### Immediate Next Steps
-1. Flesh out data schema + loader for JSON room definitions (M2).
-2. Draft Vitest suite for collision resolver edge cases.
+1. Add unit tests covering static/collision solver + crate pushing edge cases.
+2. Prototype door-driven room transitions between two JSON rooms.

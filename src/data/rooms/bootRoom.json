@@ -70,6 +70,13 @@
       "material": "block"
     }
   ],
+  "crates": [
+    {
+      "position": [0, 0.45, -1],
+      "size": [0.9, 0.9, 0.9],
+      "material": "crate"
+    }
+  ],
   "doors": [
     {
       "id": "boot-back-door",

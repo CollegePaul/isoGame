@@ -1,5 +1,6 @@
 import { Box3, BoxGeometry, Group, Mesh, Vector3 } from "three";
 import { getMaterial } from "../render/materials.js";
+import { defaultColliderMask } from "../game/physics/collisionGroups.js";
 
 const DEFAULT_TILE_SIZE = 1;
 const DEFAULT_FLOOR_HEIGHT = 0.125;
@@ -12,6 +13,7 @@ export function buildRoomFromData(roomData) {
   const meshes = [];
   const colliders = [];
   const doorways = [];
+  const dynamicEntities = [];
 
   const tileSize = roomData.tileSize ?? DEFAULT_TILE_SIZE;
   const spawnPoint = vectorFromArray(roomData.spawn, new Vector3(0, 0.9, 0));
@@ -44,6 +46,17 @@ export function buildRoomFromData(roomData) {
     });
   }
 
+  if (Array.isArray(roomData.crates)) {
+    roomData.crates.forEach((crate) => {
+      dynamicEntities.push({
+        type: "crate",
+        position: vectorFromArray(crate.position, new Vector3()),
+        size: vectorFromArray(crate.size, new Vector3(0.9, 0.9, 0.9)),
+        material: crate.material ?? "crate",
+      });
+    });
+  }
+
   if (Array.isArray(roomData.doors)) {
     roomData.doors.forEach((door) => {
       const doorResult = createDoorElement(door);
@@ -57,7 +70,7 @@ export function buildRoomFromData(roomData) {
     });
   }
 
-  return { meshes, colliders, spawnPoint, doorways };
+  return { meshes, colliders, spawnPoint, doorways, dynamicEntities };
 }
 
 function createFloor(floorData, tileSize, colliders) {
@@ -97,6 +110,7 @@ function createBoxElement(definition) {
   const size = vectorFromArray(definition.size, new Vector3(1, 1, 1));
   const position = vectorFromArray(definition.position, new Vector3());
   const axes = Array.isArray(definition.axes) && definition.axes.length > 0 ? definition.axes : ["x", "y", "z"];
+  const mask = definition.mask ?? defaultColliderMask;
   const material = getMaterial(definition.material);
 
   let mesh = null;
@@ -113,6 +127,7 @@ function createBoxElement(definition) {
     center: position.clone(),
     size: size.clone(),
     axes,
+    mask,
   };
 
   return { mesh, collider };
@@ -125,6 +140,7 @@ function createDoorElement(definition) {
   const visible = definition.visible !== false;
   const solid = definition.solid === true;
   const axes = Array.isArray(definition.axes) && definition.axes.length > 0 ? definition.axes : ["x", "y", "z"];
+  const mask = definition.mask ?? defaultColliderMask;
   const targetDefinition = definition.target ?? null;
   const targetRoom = typeof targetDefinition === "string" ? targetDefinition : targetDefinition?.room ?? null;
   const targetDoor = targetDefinition && typeof targetDefinition === "object" ? targetDefinition.door ?? null : null;
@@ -156,6 +172,7 @@ function createDoorElement(definition) {
         center: position.clone(),
         size: size.clone(),
         axes,
+        mask,
       }
     : null;
 
