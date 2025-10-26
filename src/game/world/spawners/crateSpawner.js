@@ -1,12 +1,16 @@
-import { BoxGeometry, Mesh } from "three";
+import { Mesh } from "three";
 import { getMaterial } from "../../../render/materials.js";
 import { Crate } from "../../entities/crate.js";
+import { createBoxGeometryWithUVs } from "../../../render/atlas.js";
 
 const geometryCache = new Map();
 
 function getGeometry(sizeKey, size) {
   if (!geometryCache.has(sizeKey)) {
-    geometryCache.set(sizeKey, new BoxGeometry(size.x, size.y, size.z));
+    geometryCache.set(
+      sizeKey,
+      createBoxGeometryWithUVs(size.x, size.y, size.z, { default: "crate" }),
+    );
   }
   return geometryCache.get(sizeKey);
 }

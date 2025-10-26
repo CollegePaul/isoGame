@@ -3,6 +3,7 @@ import { Player } from "./entities/player.js";
 import { World } from "./world/world.js";
 import { logger } from "../utils/logger.js";
 import { createCratesFromDefinitions } from "./world/spawners/crateSpawner.js";
+import { getRoomBuilder } from "./world/rooms/index.js";
 
 const PLAYER_GEOMETRY = new BoxGeometry(0.8, 1.6, 0.8);
 const PLAYER_MATERIAL = new MeshStandardMaterial({ color: 0xffcc66 });
@@ -10,9 +11,10 @@ const PUSH_DIRECTION = new Vector3();
 const EPSILON = 1e-4;
 const VERTICAL_SNAP_EPS = 0.3;
 const CRATE_COLLISION_ITERATIONS = 3;
+const DOOR_TRANSITION_COOLDOWN = 0.1;
 
 export class Game {
-  constructor({ scene, input }) {
+  constructor({ scene, input, initialRoom = "boot-room" }) {
     this.world = new World({ scene });
     this.player = new Player({ input });
     this.crates = [];
@@ -21,11 +23,53 @@ export class Game {
     this.playerMesh.castShadow = true;
     scene.add(this.playerMesh);
     this.activeDoorId = null;
+    this.pendingTransition = null;
+    this.transitionCooldown = 0;
+    this.currentRoom = null;
+
+    if (initialRoom) {
+      this.loadRoomByName(initialRoom);
+    }
   }
 
-  loadRoom(roomBuilder) {
-    const builtRoom = this.world.loadRoom(roomBuilder);
-    this.player.setSpawn(this.world.spawnPoint);
+  loadRoomByName(roomName, options = {}) {
+    const builder = getRoomBuilder(roomName);
+    if (!builder) {
+      logger.error(`No room builder found for "${roomName}"`);
+      return;
+    }
+
+    const builtRoom = this.world.loadRoom(builder);
+    this.currentRoom = roomName;
+
+    let spawnPoint = options.spawn ?? null;
+
+    if (!spawnPoint && options.spawnId) {
+      spawnPoint = this.world.getSpawnPoint(options.spawnId);
+    }
+
+    if (!spawnPoint && options.doorId) {
+      const doorwaySpawn = findDoorSpawn(builtRoom.doorways, options.doorId);
+      if (doorwaySpawn) {
+        spawnPoint = doorwaySpawn.position;
+        if (!options.spawnId) {
+          options.spawnId = doorwaySpawn.spawnId;
+        }
+      }
+    }
+
+    if (!spawnPoint) {
+      spawnPoint = builtRoom.spawnPoint ?? this.world.spawnPoint;
+    }
+
+    if (!spawnPoint) {
+      logger.warn(`Room "${roomName}" loaded without spawn point; using (0,0,0).`);
+    }
+
+    const spawnPosition = spawnPoint ?? new Vector3();
+    this.player.setSpawn(spawnPosition);
+    this.player.setPosition(spawnPosition);
+    this.player.velocity.set(0, 0, 0);
 
     this.crates = createCratesFromDefinitions(builtRoom.dynamicEntities ?? []);
     this.world.clearDynamicMeshes();
@@ -34,12 +78,14 @@ export class Game {
   }
 
   update(delta) {
+    this.transitionCooldown = Math.max(0, this.transitionCooldown - delta);
     this.player.update(delta, this.world);
     this.handlePlayerCrateInteractions();
     this.crates.forEach(({ entity }) => entity.update(delta, this.world));
     this.resolveCrateCollisions();
     this.syncMeshes();
     this.checkDoorways();
+    this.processPendingTransition();
   }
 
   getPlayer() {
@@ -71,10 +117,9 @@ export class Game {
     if (activeDoor) {
       if (this.activeDoorId !== activeDoor.id) {
         this.activeDoorId = activeDoor.id;
-        logger.info(
-          `Door reached: ${activeDoor.id}`,
-          activeDoor.target ? `→ target room "${activeDoor.target}"` : "(no target assigned)",
-        );
+        if (activeDoor.target) {
+          this.queueRoomTransition(activeDoor);
+        }
       }
     } else if (this.activeDoorId) {
       this.activeDoorId = null;
@@ -190,6 +235,24 @@ export class Game {
 
 const STACK_ALIGN_THRESHOLD = 0.2;
 
+function findDoorSpawn(doorways, targetDoorId) {
+  if (!targetDoorId) {
+    return null;
+  }
+  const doorway = doorways?.find((entry) => entry.id === targetDoorId);
+  if (!doorway) {
+    return null;
+  }
+  if (doorway.spawn) {
+    return { position: doorway.spawn.clone(), spawnId: doorway.spawnId };
+  }
+  const center = doorway.box?.getCenter(new Vector3());
+  if (center) {
+    return { position: center, spawnId: doorway.spawnId };
+  }
+  return null;
+}
+
 function resolveCratePair(a, b) {
   const halfA = a.getHalfSize();
   const halfB = b.getHalfSize();
@@ -303,3 +366,36 @@ function resolveCratePair(a, b) {
 
   return true;
 }
+
+Game.prototype.queueRoomTransition = function queueRoomTransition(doorway) {
+  if (this.pendingTransition && this.pendingTransition.doorId === doorway.id) {
+    return;
+  }
+
+  this.pendingTransition = {
+    doorId: doorway.id,
+    room: doorway.target,
+    targetDoor: doorway.targetDoor,
+    spawn: null,
+    spawnId: doorway.targetSpawnId ?? null,
+  };
+  this.transitionCooldown = DOOR_TRANSITION_COOLDOWN;
+};
+
+Game.prototype.processPendingTransition = function processPendingTransition() {
+  if (!this.pendingTransition || this.transitionCooldown > 0) {
+    return;
+  }
+
+  const transition = this.pendingTransition;
+  this.pendingTransition = null;
+  this.activeDoorId = null;
+
+  const options = {
+    spawn: transition.spawn,
+    spawnId: transition.spawnId,
+    doorId: transition.targetDoor,
+  };
+
+  this.loadRoomByName(transition.room, options);
+};

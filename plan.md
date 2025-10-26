@@ -41,6 +41,10 @@
 - [ ] **Stretch — Map Editor**
   - [x] Separate `editor/` bundle using shared data schema.
   - [x] Block palette UI, 3D placement with snapping, export to JSON.
+  - [x] Door placement & linking workflow in the editor.
+  - [ ] Multi-room graph validation tooling.
+  - [x] Render in-editor room graph map.
+  - [ ] Multi-room switching & spawn management tooling.
 
 ### Testing Strategy
 - Unit tests for collision solver, movement edge cases, room loader.
@@ -49,4 +53,5 @@
 
 ### Immediate Next Steps
 1. Add unit tests covering static/collision solver + crate pushing edge cases.
-2. Prototype door-driven room transitions between two JSON rooms.
+2. Add graph validation (unlinked doors, overlapping rooms) surfaced in the editor sidebar.
+3. Block out a small room graph (3–4 rooms) to exercise transitions and puzzle flow.

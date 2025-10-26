@@ -22,6 +22,7 @@
         background: var(--bg);
         color: var(--text);
         font-family: "Segoe UI", system-ui, sans-serif;
+        overflow: hidden;
       }
 
       * {
@@ -30,33 +31,198 @@
 
       .layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 320px;
-        height: 100%;
+        grid-template-columns: 300px minmax(0, 1fr) 300px;
+        height: 100vh;
       }
 
-      #viewport {
+      .left-panel {
+        background: var(--panel);
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+
+      .sidebar-section {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.18);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .sidebar-section h2 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .sidebar-label {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      #room-id-input {
+        width: 100%;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 8px 10px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+      }
+
+      .properties-list {
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--text-muted);
+      }
+
+      .properties-list strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .properties-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .properties-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .properties-row strong {
+        min-width: 72px;
+      }
+
+      .properties-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .properties-field span {
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        color: var(--text-muted);
+        text-transform: uppercase;
+      }
+
+      .properties-field input,
+      .properties-field select {
+        width: 100%;
+      }
+
+      .properties-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .viewport-column {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      #viewport-canvas {
         position: relative;
         background: #0c1018;
+        flex: 1 1 auto;
+        min-height: 280px;
+      }
+
+      .material-panel {
+        flex: 0 0 200px;
+        padding: 12px;
+        background: rgba(19, 26, 40, 0.92);
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+
+      .material-panel h2 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .material-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+        gap: 12px;
+        overflow-y: auto;
+        padding-right: 4px;
+        padding-bottom: 4px;
+      }
+
+      button.material-card {
+        width: 72px;
+        height: 72px;
+        padding: 4px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      button.material-card:hover {
+        background: rgba(255, 255, 255, 0.08);
+        transform: translateY(-1px);
+      }
+
+      button.material-card.selected {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px rgba(76, 139, 245, 0.4);
+      }
+
+      .material-preview {
+        width: 100%;
+        height: 100%;
+        border-radius: 8px;
+        border: 1px solid rgba(0, 0, 0, 0.35);
+        background-color: rgba(12, 17, 26, 0.6);
+        background-repeat: no-repeat;
+        image-rendering: pixelated;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
       }
 
       .panel {
         background: var(--panel);
-        padding: 16px;
+        padding: 12px;
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: 12px;
         border-left: 1px solid rgba(255, 255, 255, 0.05);
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
 
       h1 {
-        font-size: 18px;
+        font-size: 16px;
         margin: 0;
       }
 
       fieldset {
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 8px;
-        padding: 12px;
+        padding: 10px;
       }
 
       legend {
@@ -105,11 +271,147 @@
         margin-top: 6px;
         line-height: 1.4;
       }
-    </style>
+    
+      .room-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      #room-select {
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 8px 10px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+      }
+
+      #add-room-btn {
+        align-self: flex-end;
+        width: 60%;
+        padding: 8px 12px;
+      }
+
+      .tool-select select {
+        width: 100%;
+      }
+
+      .tool-variant-container {
+        margin-top: 8px;
+      }
+
+      .tool-variant-buttons {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .tool-variant-buttons button {
+        flex: 1 1 80px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text);
+        cursor: pointer;
+        transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+      }
+
+      .tool-variant-buttons button:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      .tool-variant-buttons button.selected {
+        border-color: var(--accent);
+        background: rgba(76, 139, 245, 0.15);
+        color: var(--text);
+      }
+
+      .export-buttons {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .export-buttons button {
+        flex: 1 1 auto;
+      }
+
+      #room-map {
+        width: 100%;
+        height: 240px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(0, 0, 0, 0.25);
+        border-radius: 8px;
+        display: block;
+      }
+
+      .validation-list {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 1.4;
+        max-height: 160px;
+        overflow-y: auto;
+        color: #f4f6ff;
+      }
+
+      .validation-list .warning {
+        background: rgba(255, 196, 0, 0.12);
+        border: 1px solid rgba(255, 196, 0, 0.45);
+        padding: 6px 8px;
+        border-radius: 6px;
+        margin-bottom: 6px;
+      }
+
+      .validation-list .warning strong {
+        color: #ffc400;
+      }
+</style>
   </head>
   <body>
     <div class="layout">
-      <div id="viewport"></div>
+      <aside class="left-panel">
+        <div class="sidebar-section">
+          <h2>Rooms</h2>
+          <div class="room-list">
+            <select id="room-select"></select>
+            <button id="add-room-btn" type="button" class="secondary">New Room</button>
+          </div>
+        </div>
+        <div class="sidebar-section">
+          <h2>Map</h2>
+          <canvas id="room-map" width="240" height="240"></canvas>
+          <div id="validation-messages" class="validation-list"></div>
+        </div>
+        <div class="sidebar-section">
+          <h2>Room Settings</h2>
+          <label class="sidebar-label" for="room-id-input">Room ID</label>
+          <input id="room-id-input" type="text" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="sidebar-section">
+          <h2>Door Placement</h2>
+          <label class="sidebar-label" for="door-orientation-select">Orientation</label>
+          <select id="door-orientation-select">
+            <option value="north">North (top wall)</option>
+            <option value="south">South (bottom wall)</option>
+            <option value="west">West (left wall)</option>
+            <option value="east">East (right wall)</option>
+          </select>
+        </div>
+        <div class="sidebar-section">
+          <h2>Selection</h2>
+          <div id="selection-details" class="properties-list">
+            <em>No selection</em>
+          </div>
+        </div>
+      </aside>
+      <div class="viewport-column">
+        <div id="viewport-canvas"></div>
+        <div id="material-panel" class="material-panel">
+          <h2 id="material-panel-title">Material Presets</h2>
+          <div id="block-materials" class="material-grid"></div>
+        </div>
+      </div>
       <aside class="panel">
         <div>
           <h1>Room Editor</h1>
@@ -120,16 +422,21 @@
 
         <fieldset>
           <legend>Tool</legend>
-          <label>
+          <label class="tool-select">
             Item
             <select id="tool-select">
-              <option value="block-1">Solid Block (1 high)</option>
-              <option value="block-2">Solid Block (2 high)</option>
+              <option value="select">Select</option>
+              <option value="block" selected>Solid Block</option>
+              <option value="floor">Floor</option>
               <option value="crate">Crate</option>
+              <option value="object">Object</option>
+              <option value="door">Door</option>
+              <option value="light">Light</option>
               <option value="player">Player Spawn</option>
               <option value="erase">Eraser</option>
             </select>
           </label>
+          <div id="tool-variant-container" class="tool-variant-container"></div>
         </fieldset>
 
         <fieldset>
@@ -142,16 +449,27 @@
             Depth
             <input type="number" id="grid-depth" min="4" max="16" value="8" />
           </label>
+          <label>
+            Wall Height
+            <input type="number" id="grid-wall-height" min="1" max="8" value="3" />
+          </label>
+          <label>
+            Wall Thickness
+            <input type="number" id="grid-wall-thickness" min="0.1" max="0.75" step="0.05" value="0.25" />
+          </label>
           <button class="secondary" id="apply-grid">Apply Grid Size</button>
         </fieldset>
 
         <fieldset>
           <legend>Export</legend>
-          <button id="export-room">Export Room JSON</button>
-          <div class="hint">
-            After exporting, copy the JSON into <code>src/data/rooms/</code>. The room is compatible with the runtime loader.
+          <div class="export-buttons">
+            <button id="export-project">Export Project JSON</button>
+            <button id="import-project" class="secondary">Import Project JSON</button>
           </div>
-          <textarea id="export-output" readonly></textarea>
+          <div class="hint">
+            Project export includes every room, door link, and editor metadata.
+          </div>
+          <textarea id="export-output" spellcheck="false"></textarea>
         </fieldset>
       </aside>
     </div>

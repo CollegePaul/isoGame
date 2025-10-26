@@ -42,6 +42,7 @@ export class World {
     this.scene.add(this.dynamicGroup);
     this.colliders = [];
     this.spawnPoint = new Vector3(0, 0.8, 0);
+    this.spawnPoints = new Map();
     this.doorways = [];
   }
 
@@ -50,12 +51,24 @@ export class World {
     this.dynamicGroup.clear();
     this.colliders = [];
     const builtRoom = roomBuilder();
-    const { meshes = [], colliders = [], spawnPoint, doorways = [] } = builtRoom;
+    const {
+      meshes = [],
+      colliders = [],
+      spawnPoint,
+      spawnId = "default",
+      spawnPoints = new Map(),
+      doorways = [],
+    } = builtRoom;
     meshes.forEach((mesh) => this.roomGroup.add(mesh));
     this.colliders.push(...colliders.map((item) => normalizeCollider(item)));
     this.doorways = doorways;
+    this.spawnPoints = new Map(spawnPoints);
     if (spawnPoint) {
       this.spawnPoint.copy(spawnPoint);
+      this.spawnPoints.set(spawnId ?? "default", this.spawnPoint.clone());
+      if (!this.spawnPoints.has("default")) {
+        this.spawnPoints.set("default", this.spawnPoint.clone());
+      }
     }
     return builtRoom;
   }
@@ -66,6 +79,14 @@ export class World {
 
   getDoorways() {
     return this.doorways;
+  }
+
+  getSpawnPoint(id) {
+    if (!id) {
+      return this.spawnPoint.clone();
+    }
+    const spawn = this.spawnPoints.get(id);
+    return spawn ? spawn.clone() : this.spawnPoint.clone();
   }
 
   clearDynamicMeshes() {

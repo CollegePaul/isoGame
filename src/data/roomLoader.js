@@ -1,9 +1,28 @@
-import { Box3, BoxGeometry, Group, Mesh, Vector3 } from "three";
+import { Box3, Color, Group, Mesh, MeshBasicMaterial, PointLight, SphereGeometry, Vector3 } from "three";
 import { getMaterial } from "../render/materials.js";
 import { defaultColliderMask } from "../game/physics/collisionGroups.js";
+import { createBoxGeometryWithUVs } from "../render/atlas.js";
+import { getObjectVariants, loadObjectLibrary } from "../render/objectLibrary.js";
+import { getModelDefinition } from "../data/models.js";
 
 const DEFAULT_TILE_SIZE = 1;
 const DEFAULT_FLOOR_HEIGHT = 0.125;
+const floorGeometryCache = new Map();
+const lightIndicatorGeometry = new SphereGeometry(0.15, 16, 16);
+const doorPlugMaterial = new MeshBasicMaterial({
+  color: 0x080b12,
+  transparent: true,
+  opacity: 0.96,
+  depthWrite: false,
+});
+doorPlugMaterial.name = "doorPlug";
+
+const DOOR_INWARD_NORMALS = {
+  north: new Vector3(0, 0, 1),
+  south: new Vector3(0, 0, -1),
+  west: new Vector3(1, 0, 0),
+  east: new Vector3(-1, 0, 0),
+};
 
 export function createRoomBuilder(roomData) {
   return () => buildRoomFromData(roomData);
@@ -14,15 +33,37 @@ export function buildRoomFromData(roomData) {
   const colliders = [];
   const doorways = [];
   const dynamicEntities = [];
+  const spawnPoints = new Map();
 
   const tileSize = roomData.tileSize ?? DEFAULT_TILE_SIZE;
   const spawnPoint = vectorFromArray(roomData.spawn, new Vector3(0, 0.9, 0));
+  const spawnId = roomData.spawnId ?? "default";
+  spawnPoints.set(spawnId, spawnPoint.clone());
 
   if (roomData.floor) {
     meshes.push(createFloor(roomData.floor, tileSize, colliders));
   }
 
-  if (Array.isArray(roomData.walls)) {
+  const floorWidth = roomData.floor?.width ?? roomData.width ?? 8;
+  const floorDepth = roomData.floor?.depth ?? roomData.depth ?? 8;
+  const hasPerimeterWalls =
+    typeof roomData.wallHeight === "number" || typeof roomData.wallThickness === "number";
+
+  if (hasPerimeterWalls && floorWidth && floorDepth) {
+    const perimeter = createPerimeterWalls({
+      width: floorWidth,
+      depth: floorDepth,
+      height: roomData.wallHeight ?? 3,
+      thickness: roomData.wallThickness ?? 0.25,
+      tileSize,
+    });
+    if (perimeter) {
+      meshes.push(perimeter.group);
+      colliders.push(...perimeter.colliders);
+    }
+  }
+
+  if (Array.isArray(roomData.walls) && !hasPerimeterWalls) {
     roomData.walls.forEach((wall) => {
       const wallResult = createBoxElement(wall);
       if (wallResult.mesh) {
@@ -57,20 +98,167 @@ export function buildRoomFromData(roomData) {
     });
   }
 
-  if (Array.isArray(roomData.doors)) {
-    roomData.doors.forEach((door) => {
-      const doorResult = createDoorElement(door);
-      if (doorResult.mesh) {
-        meshes.push(doorResult.mesh);
-      }
-      if (doorResult.collider) {
-        colliders.push(doorResult.collider);
-      }
-      doorways.push(doorResult.doorway);
+  if (Array.isArray(roomData.objects) && roomData.objects.length > 0) {
+    const objectGroup = new Group();
+    meshes.push(objectGroup);
+    loadObjectLibrary()
+      .then(() => getObjectVariants())
+      .then((loadedVariants) => {
+        const variantLookup = new Map(loadedVariants.map((variant) => [variant.id, variant]));
+        roomData.objects.forEach((object) => {
+          const definition = getModelDefinition(object.presetId ?? object.id);
+          const variant = variantLookup.get(object.presetId ?? object.id) || loadedVariants[0] || null;
+          let instance = null;
+          if (variant) {
+            instance = variant.createInstance();
+          }
+          if (!instance) {
+            instance = new Mesh(createBoxGeometryWithUVs(1, 1, 1, { default: "block" }), getMaterial("default"));
+          }
+          instance.traverse?.((node) => {
+            if (node.isMesh) {
+              node.castShadow = true;
+              node.receiveShadow = true;
+            }
+          });
+          const worldPosition = vectorFromArray(object.position, null) ?? new Vector3(object.x ?? 0, object.height ?? 0, object.z ?? 0);
+          instance.position.copy(worldPosition);
+          instance.rotation.y = object.rotation ?? 0;
+          objectGroup.add(instance);
+
+          const sizeArray = definition?.size ?? variant?.size ?? [1, variant?.height ?? 1, 1];
+          const colliderSize = new Vector3(sizeArray[0] ?? 1, sizeArray[1] ?? variant?.height ?? 1, sizeArray[2] ?? 1);
+          const colliderCenter = worldPosition.clone();
+          const isSolid = definition?.solid ?? variant?.solid ?? true;
+          if (isSolid) {
+            colliders.push({
+              center: colliderCenter,
+              size: colliderSize,
+              axes: ["x", "y", "z"],
+              mask: defaultColliderMask,
+            });
+          }
+
+          if (definition?.collectable ?? variant?.collectable) {
+            dynamicEntities.push({
+              type: "collectable",
+              id: definition?.id ?? object.presetId ?? object.id,
+              position: colliderCenter.clone(),
+              size: colliderSize.clone(),
+              metadata: definition ?? null,
+            });
+          }
+        });
+      })
+      .catch((error) => {
+        console.error("Failed to populate objects:", error);
+      });
+  }
+
+  if (Array.isArray(roomData.lights) && roomData.lights.length > 0) {
+    const lightsGroup = new Group();
+    meshes.push(lightsGroup);
+    roomData.lights.forEach((light) => {
+      const position = vectorFromArray(light.position, new Vector3(0, 2, 0));
+      const color = new Color(light.color ?? "#ffffff");
+      const intensity = light.intensity ?? 1;
+      const point = new PointLight(color, intensity, 10, 2);
+      point.position.copy(position);
+      point.castShadow = false;
+
+      const indicatorMaterial = new MeshBasicMaterial({ color, transparent: true, opacity: 0.85 });
+      const indicator = new Mesh(lightIndicatorGeometry, indicatorMaterial);
+      indicator.position.copy(position);
+
+      const group = new Group();
+      group.add(point, indicator);
+      lightsGroup.add(group);
     });
   }
 
-  return { meshes, colliders, spawnPoint, doorways, dynamicEntities };
+  if (Array.isArray(roomData.doors)) {
+    roomData.doors.forEach((door) => {
+      const doorResult = createDoorElement(door);
+      doorResult.meshes?.forEach((mesh) => meshes.push(mesh));
+      doorResult.colliders?.forEach((collider) => colliders.push(collider));
+      doorways.push(doorResult.doorway);
+      if (doorResult.doorway.spawn) {
+        spawnPoints.set(doorResult.doorway.spawnId ?? `${doorResult.doorway.id}-spawn`, doorResult.doorway.spawn.clone());
+      }
+    });
+  }
+
+  return { meshes, colliders, spawnPoint, spawnId, spawnPoints, doorways, dynamicEntities };
+}
+
+function createPerimeterWalls({ width, depth, height, thickness, tileSize }) {
+  if (!width || !depth) {
+    return null;
+  }
+
+  const group = new Group();
+  group.name = "PerimeterWalls";
+  const colliders = [];
+  const material = getMaterial("wall");
+
+  const wallHeight = Math.max(1, height ?? 3);
+  const wallThickness = Math.max(0.1, thickness ?? 0.25);
+  const segmentLength = tileSize;
+  const thicknessWorld = wallThickness * tileSize;
+  const halfHeight = wallHeight / 2;
+  const xOffset = (width - 1) / 2;
+  const zOffset = (depth - 1) / 2;
+
+  const westGeometry = createBoxGeometryWithUVs(thicknessWorld, wallHeight, segmentLength, { default: "wall" });
+  const northGeometry = createBoxGeometryWithUVs(segmentLength, wallHeight, thicknessWorld, { default: "wall" });
+
+  const westX = (-xOffset - 0.5) * tileSize - thicknessWorld / 2;
+  const northZ = (-zOffset - 0.5) * tileSize - thicknessWorld / 2;
+
+  for (let z = 0; z < depth; z += 1) {
+    const mesh = new Mesh(westGeometry, material);
+    mesh.position.set(westX, halfHeight, (z - zOffset) * tileSize);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    const mesh = new Mesh(northGeometry, material);
+    mesh.position.set((x - xOffset) * tileSize, halfHeight, northZ);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  const westCollider = {
+    center: new Vector3(westX, halfHeight, 0),
+    size: new Vector3(thicknessWorld, wallHeight, depth * tileSize),
+    axes: ["x", "y", "z"],
+    mask: defaultColliderMask,
+  };
+  const northCollider = {
+    center: new Vector3(0, halfHeight, northZ),
+    size: new Vector3(width * tileSize, wallHeight, thicknessWorld),
+    axes: ["x", "y", "z"],
+    mask: defaultColliderMask,
+  };
+  const eastCollider = {
+    center: new Vector3((xOffset + 0.5) * tileSize + thicknessWorld / 2, halfHeight, 0),
+    size: new Vector3(thicknessWorld, wallHeight, depth * tileSize),
+    axes: ["x", "y", "z"],
+    mask: defaultColliderMask,
+  };
+  const southCollider = {
+    center: new Vector3(0, halfHeight, (zOffset + 0.5) * tileSize + thicknessWorld / 2),
+    size: new Vector3(width * tileSize, wallHeight, thicknessWorld),
+    axes: ["x", "y", "z"],
+    mask: defaultColliderMask,
+  };
+
+  colliders.push(westCollider, northCollider, eastCollider, southCollider);
+
+  return { group, colliders };
 }
 
 function createFloor(floorData, tileSize, colliders) {
@@ -78,15 +266,24 @@ function createFloor(floorData, tileSize, colliders) {
   const depth = floorData.depth ?? floorData.size?.[1] ?? width;
   const height = floorData.height ?? DEFAULT_FLOOR_HEIGHT;
   const material = getMaterial(floorData.material ?? "floor");
+  const defaultTiles = floorData.defaultTiles ?? resolveMaterialTiles(floorData.material ?? "floor");
+  const tileOverrides = new Map();
+  (floorData.tiles ?? []).forEach((tile) => {
+    if (typeof tile?.x === "number" && typeof tile?.z === "number") {
+      tileOverrides.set(`${tile.x},${tile.z}`, tile.tiles ?? defaultTiles);
+    }
+  });
 
   const group = new Group();
-  const geometry = new BoxGeometry(tileSize, height, tileSize);
 
   const xOffset = (width - 1) / 2;
   const zOffset = (depth - 1) / 2;
 
   for (let z = 0; z < depth; z += 1) {
     for (let x = 0; x < width; x += 1) {
+      const key = `${x},${z}`;
+      const tiles = tileOverrides.get(key) ?? defaultTiles;
+      const geometry = getFloorGeometry(tileSize, height, tiles);
       const mesh = new Mesh(geometry, material);
       mesh.position.set((x - xOffset) * tileSize, -height / 2, (z - zOffset) * tileSize);
       mesh.receiveShadow = true;
@@ -106,6 +303,14 @@ function createFloor(floorData, tileSize, colliders) {
   return group;
 }
 
+function getFloorGeometry(tileSize, height, tiles) {
+  const key = `${tileSize}:${height}:${JSON.stringify(tiles ?? {})}`;
+  if (!floorGeometryCache.has(key)) {
+    floorGeometryCache.set(key, createBoxGeometryWithUVs(tileSize, height, tileSize, tiles));
+  }
+  return floorGeometryCache.get(key);
+}
+
 function createBoxElement(definition) {
   const size = vectorFromArray(definition.size, new Vector3(1, 1, 1));
   const position = vectorFromArray(definition.position, new Vector3());
@@ -116,7 +321,12 @@ function createBoxElement(definition) {
   let mesh = null;
 
   if (definition.visible !== false) {
-    const geometry = new BoxGeometry(size.x, size.y, size.z);
+    const geometry = createBoxGeometryWithUVs(
+      size.x,
+      size.y,
+      size.z,
+      definition.tiles ?? resolveMaterialTiles(definition.material),
+    );
     mesh = new Mesh(geometry, material);
     mesh.position.copy(position);
     mesh.castShadow = true;
@@ -133,7 +343,7 @@ function createBoxElement(definition) {
   return { mesh, collider };
 }
 
-function createDoorElement(definition) {
+export function createDoorElement(definition) {
   const size = vectorFromArray(definition.size, new Vector3(1.5, 2.5, 0.5));
   const position = vectorFromArray(definition.position, new Vector3());
   const material = getMaterial(definition.material ?? "door");
@@ -141,6 +351,7 @@ function createDoorElement(definition) {
   const solid = definition.solid === true;
   const axes = Array.isArray(definition.axes) && definition.axes.length > 0 ? definition.axes : ["x", "y", "z"];
   const mask = definition.mask ?? defaultColliderMask;
+  const orientation = definition.orientation ?? "north";
   const targetDefinition = definition.target ?? null;
   const targetRoom = typeof targetDefinition === "string" ? targetDefinition : targetDefinition?.room ?? null;
   const targetDoor = targetDefinition && typeof targetDefinition === "object" ? targetDefinition.door ?? null : null;
@@ -150,33 +361,244 @@ function createDoorElement(definition) {
     ? vectorFromArray(targetDefinition.spawn, null)
     : null;
 
-  let mesh = null;
+  const meshes = [];
+  const doorColliders = [];
+
   if (visible) {
-    const geometry = new BoxGeometry(size.x, size.y, size.z);
-    mesh = new Mesh(geometry, material);
-    mesh.position.copy(position);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    const frameOptions = {
+      openingWidth: definition.openingWidth ?? 1,
+      postWidth: definition.postWidth,
+      lintelHeight: definition.lintelHeight,
+      depth: definition.depth,
+      tiles: definition.tiles ?? resolveMaterialTiles(definition.material ?? "door"),
+      material: definition.material ?? "door",
+      orientation,
+    };
+    const frame = createDoorFrame(position, size, frameOptions);
+    frame.meshes.forEach((mesh) => {
+      mesh.material = material;
+      meshes.push(mesh);
+    });
+    doorColliders.push(...frame.colliders);
+
+    const plug = createDoorPlug(position, size, frameOptions);
+    if (plug) {
+      plug.material = doorPlugMaterial;
+      meshes.push(plug);
+    }
   }
 
   const doorway = {
     id: definition.id ?? `door-${Math.random().toString(36).slice(2, 8)}`,
-    box: new Box3().setFromCenterAndSize(position.clone(), size.clone()),
+    box: createDoorwayBox(position, size, {
+      openingWidth: definition.openingWidth,
+      lintelHeight: definition.lintelHeight,
+      orientation,
+      depth: definition.depth,
+      postWidth: definition.postWidth,
+    }),
     target: targetRoom,
     targetDoor,
     spawn: spawnOverride,
+    spawnId: definition.spawnId ?? `${definition.id}-spawn`,
+    targetSpawnId: definition.target?.spawnId ?? definition.targetSpawnId,
+    orientation,
   };
 
-  const collider = solid
-    ? {
-        center: position.clone(),
-        size: size.clone(),
-        axes,
-        mask,
-      }
-    : null;
+  if (!spawnOverride && definition.spawn) {
+    doorway.spawn = vectorFromArray(definition.spawn, position.clone());
+  } else if (spawnOverride) {
+    doorway.spawn = spawnOverride.clone();
+  }
 
-  return { mesh, collider, doorway };
+  if (solid) {
+    doorColliders.push({
+      center: position.clone(),
+      size: size.clone(),
+      axes,
+      mask,
+    });
+  }
+
+  return { meshes, colliders: doorColliders, doorway };
+}
+
+function createDoorFrame(position, size, options = {}) {
+  const meshes = [];
+  const colliders = [];
+
+  const orientation = options.orientation ?? "north";
+  const isNorthSouth = orientation === "north" || orientation === "south";
+  const frameHeight = size.y;
+  const depth = options.depth ?? (isNorthSouth ? size.z : size.x);
+  const lintelHeight = Math.min(options.lintelHeight ?? 0.5, frameHeight);
+  const openingWidth = options.openingWidth ?? 1;
+  const frameWidth = isNorthSouth ? size.x : size.z;
+  const postWidth = options.postWidth ?? Math.max(0, (frameWidth - openingWidth) / 2);
+  const openingHeight = Math.max(0, frameHeight - lintelHeight);
+
+  const bottom = position.y - frameHeight / 2;
+  const postCenterY = bottom + openingHeight / 2;
+  const lintelCenterY = bottom + openingHeight + lintelHeight / 2;
+
+  const tiles = options.tiles ?? resolveMaterialTiles(options.material ?? "door");
+
+  const parallelOffset = openingWidth / 2 + postWidth / 2;
+
+  if (postWidth > 0 && openingHeight > 0) {
+    const postGeometry = createBoxGeometryWithUVs(
+      isNorthSouth ? postWidth : depth,
+      openingHeight,
+      isNorthSouth ? depth : postWidth,
+      tiles,
+    );
+
+    const leftPost = new Mesh(postGeometry.clone(), null);
+    const rightPost = new Mesh(postGeometry.clone(), null);
+
+    if (isNorthSouth) {
+      leftPost.position.set(position.x - parallelOffset, postCenterY, position.z);
+      rightPost.position.set(position.x + parallelOffset, postCenterY, position.z);
+      colliders.push({
+        center: leftPost.position.clone(),
+        size: new Vector3(postWidth, openingHeight, depth),
+        axes: ["x", "y", "z"],
+        mask: defaultColliderMask,
+      });
+      colliders.push({
+        center: rightPost.position.clone(),
+        size: new Vector3(postWidth, openingHeight, depth),
+        axes: ["x", "y", "z"],
+        mask: defaultColliderMask,
+      });
+    } else {
+      leftPost.position.set(position.x, postCenterY, position.z - parallelOffset);
+      rightPost.position.set(position.x, postCenterY, position.z + parallelOffset);
+      colliders.push({
+        center: leftPost.position.clone(),
+        size: new Vector3(depth, openingHeight, postWidth),
+        axes: ["x", "y", "z"],
+        mask: defaultColliderMask,
+      });
+      colliders.push({
+        center: rightPost.position.clone(),
+        size: new Vector3(depth, openingHeight, postWidth),
+        axes: ["x", "y", "z"],
+        mask: defaultColliderMask,
+      });
+    }
+
+    leftPost.castShadow = true;
+    leftPost.receiveShadow = true;
+    rightPost.castShadow = true;
+    rightPost.receiveShadow = true;
+    meshes.push(leftPost, rightPost);
+  }
+
+  if (lintelHeight > 0) {
+    const lintelWidth = openingWidth + postWidth * 2;
+    const lintelGeometry = createBoxGeometryWithUVs(
+      isNorthSouth ? lintelWidth : depth,
+      lintelHeight,
+      isNorthSouth ? depth : lintelWidth,
+      tiles,
+    );
+    const lintel = new Mesh(lintelGeometry, null);
+    lintel.position.copy(position);
+    lintel.position.y = lintelCenterY;
+    lintel.castShadow = true;
+    lintel.receiveShadow = true;
+    meshes.push(lintel);
+    colliders.push({
+      center: lintel.position.clone(),
+      size: new Vector3(isNorthSouth ? lintelWidth : depth, lintelHeight, isNorthSouth ? depth : lintelWidth),
+      axes: ["x", "y", "z"],
+      mask: defaultColliderMask,
+    });
+  }
+
+  return { meshes, colliders };
+}
+
+function createDoorPlug(position, size, options = {}) {
+  const orientation = options.orientation ?? "north";
+  const isNorthSouth = orientation === "north" || orientation === "south";
+  const frameHeight = size.y;
+  const depth = options.depth ?? (isNorthSouth ? size.z : size.x);
+  const lintelHeight = Math.min(options.lintelHeight ?? 0.5, frameHeight);
+  const openingWidth = options.openingWidth ?? 1;
+  const frameWidth = isNorthSouth ? size.x : size.z;
+  const postWidth = options.postWidth ?? Math.max(0, (frameWidth - openingWidth) / 2);
+  const openingHeight = Math.max(0, frameHeight - lintelHeight);
+
+  if (openingHeight <= 0 || openingWidth <= 0) {
+    return null;
+  }
+
+  const plugThickness = Math.max(0.04, Math.min(0.12, depth * 0.2));
+  const geometry = createBoxGeometryWithUVs(
+    isNorthSouth ? openingWidth : plugThickness,
+    openingHeight,
+    isNorthSouth ? plugThickness : openingWidth,
+    { default: "wall" },
+  );
+
+  const plug = new Mesh(geometry, doorPlugMaterial);
+  const bottom = position.y - frameHeight / 2;
+  plug.position.set(position.x, bottom + openingHeight / 2, position.z);
+
+  const inward = getDoorInwardNormal(orientation);
+  const plugOffset = depth / 2 - plugThickness / 2;
+  plug.position.x += inward.x * plugOffset;
+  plug.position.z += inward.z * plugOffset;
+
+  return plug;
+}
+
+function createDoorwayBox(position, size, options = {}) {
+  const frameHeight = size.y;
+  const lintelHeight = Math.min(options.lintelHeight ?? 0.5, frameHeight);
+  const openingWidth = options.openingWidth ?? 1;
+  const openingHeight = Math.max(0.1, frameHeight - lintelHeight);
+  const orientation = options.orientation ?? "north";
+  const isNorthSouth = orientation === "north" || orientation === "south";
+  const depth = options.depth ?? (isNorthSouth ? size.z : size.x);
+
+  const center = position.clone();
+  center.y = position.y - frameHeight / 2 + openingHeight / 2;
+
+  const boxSize = new Vector3(
+    isNorthSouth ? openingWidth : depth,
+    openingHeight,
+    isNorthSouth ? depth : openingWidth,
+  );
+  return new Box3().setFromCenterAndSize(center, boxSize);
+}
+
+function resolveMaterialTiles(material = "default") {
+  switch (material) {
+    case "floor":
+      return { top: "floor", bottom: "floor", sides: "floor" };
+    case "wall":
+      return { default: "wall" };
+    case "block":
+    case "blockTall":
+      return {
+        top: "blockTop",
+        bottom: "blockSide",
+        sides: "blockSide",
+      };
+    case "crate":
+      return { default: "crate" };
+    case "door":
+      return { default: "wall" };
+    default:
+      return { default: "blockSide" };
+  }
+}
+
+function getDoorInwardNormal(orientation) {
+  return DOOR_INWARD_NORMALS[orientation] ?? DOOR_INWARD_NORMALS.north;
 }
 
 function vectorFromArray(array, fallback) {

@@ -22,3 +22,15 @@ eg a floor could have repeted uv's and just use 1 32x32 tile
 Would I need seperate cubes for each seperate block with seperate uvs,
 or could 1 cube be mapped to the atlas?
 This way there would not be many models or textures to load?
+
+### Current atlas layout (32×32 tiles)
+
+| Tile | Atlas slot (column,row) | Usage |
+| ---- | ----------------------- | ----- |
+| floor | (0,0) | floor tops/bottoms |
+| wall | (0,1) | wall faces & door surrounds |
+| blockTop | (0,2) | static block tops |
+| blockSide | (0,3) | static block sides & underside |
+| crate | (0,4) | crate faces |
+
+All block-like meshes are generated in code and their UVs remapped to these atlas slots. Extend this table as more tiles are added.
