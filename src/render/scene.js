@@ -21,9 +21,11 @@ export function initSceneGraph() {
   scene.background = new Color("#1a202c");
 
   const ambient = new AmbientLight(0xffffff, 0.6);
+  ambient.name = "global-ambient";
   scene.add(ambient);
 
   const keyLight = new DirectionalLight(0xffffff, 0.7);
+  keyLight.name = "global-key-light";
   keyLight.position.set(5, 10, 7);
   scene.add(keyLight);
 

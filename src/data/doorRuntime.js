@@ -29,6 +29,8 @@ export function computeDoorDefinition(door, gridMeta = {}) {
   const frameHeight = door.height ?? DEFAULT_DOOR_HEIGHT;
   const postWidth = door.postWidth ?? DEFAULT_POST_WIDTH;
   const frameDepth = door.depth ?? DEFAULT_DOOR_DEPTH;
+  const providedLevel = Number.isFinite(door.level) ? Number(door.level) : null;
+  const baseLevel = providedLevel ?? 0;
 
   const worldX = (door.x - xOffset) * tileSize;
   const worldZ = (door.z - zOffset) * tileSize;
@@ -48,7 +50,20 @@ export function computeDoorDefinition(door, gridMeta = {}) {
     centerX = worldX + (orientation === "west" ? -frameDepth / 2 : frameDepth / 2);
   }
 
-  const position = [centerX, frameHeight / 2, centerZ];
+  let centerY = null;
+  if (Array.isArray(door.position) && Number.isFinite(door.position[1])) {
+    centerY = Number(door.position[1]);
+  } else if (Number.isFinite(door.centerY)) {
+    centerY = Number(door.centerY);
+  }
+  if (!Number.isFinite(centerY)) {
+    const base = Number.isFinite(door.baseLevel) ? Number(door.baseLevel) : baseLevel;
+    centerY = base + frameHeight / 2;
+  }
+  const inferredLevel = Math.round(centerY - frameHeight / 2);
+  const level = Number.isFinite(providedLevel) ? providedLevel : inferredLevel;
+
+  const position = [centerX, centerY, centerZ];
   const size = [sizeX, frameHeight, sizeZ];
 
   const id = sanitizeId(door.id) || fallbackDoorId(door.x, door.z, orientation);
@@ -64,6 +79,7 @@ export function computeDoorDefinition(door, gridMeta = {}) {
     orientation,
     postWidth,
     depth: frameDepth,
+    level,
   };
 
   const targetRoom = door.targetRoom ?? door.target?.room ?? "";
@@ -85,24 +101,26 @@ export function computeDoorDefinition(door, gridMeta = {}) {
   }
 
   definition.spawnId = door.spawnId ?? `${id}-spawn`;
-  definition.spawn = door.spawn ?? computeDefaultDoorSpawn(position, frameDepth, orientation);
+  definition.spawn =
+    door.spawn ?? computeDefaultDoorSpawn(position, frameDepth, orientation, level);
 
   return definition;
 }
 
-function computeDefaultDoorSpawn(position, depth, orientation) {
+function computeDefaultDoorSpawn(position, depth, orientation, level = 0) {
   const [cx, cy, cz] = position;
   const offset = depth + 0.5;
+  const spawnY = level + 0.9;
   switch (orientation) {
     case "north":
-      return [cx, 0.9, cz + offset];
+      return [cx, spawnY, cz + offset];
     case "south":
-      return [cx, 0.9, cz - offset];
+      return [cx, spawnY, cz - offset];
     case "west":
-      return [cx + offset, 0.9, cz];
+      return [cx + offset, spawnY, cz];
     case "east":
-      return [cx - offset, 0.9, cz];
+      return [cx - offset, spawnY, cz];
     default:
-      return [cx, 0.9, cz];
+      return [cx, spawnY, cz];
   }
 }

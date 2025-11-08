@@ -13,12 +13,18 @@ const withDefaults = (definition) => ({
 });
 
 export const modelDefinitions = {
+  player: withDefaults({
+    id: "player",
+    label: "Computer Monitor",
+    size: [0.9, 0.9, 0.9],
+    tags: ["player"],
+  }),
   monitor: withDefaults({
     id: "monitor",
     label: "Computer Monitor",
     size: [1, 1, 1],
     collectable: true,
-    solid: true,
+    solid: false,
     defaultState: "inactive",
     transformsTo: "monitor_on",
     description: "A computer monitor. The screen is dark but the power light glows.",
@@ -29,7 +35,7 @@ export const modelDefinitions = {
     label: "Computer Monitor (Active)",
     size: [1, 1, 1],
     collectable: true,
-    solid: true,
+    solid: false,
     defaultState: "active",
     description: "A bright CRT monitor displaying diagnostic numbers: 52953.",
     tags: ["electronics", "computer"],
@@ -51,12 +57,12 @@ export const modelDefinitions = {
     solid: true,
     defaultState: "inactive",
     requirements: ["tape"],
-    transformsTo: "computer_on",
+    transformsTo: "computer_active",
     description: "A towering mainframe with an empty tape deck. It hums quietly.",
     tags: ["electronics", "computer"],
   }),
   computer_on: withDefaults({
-    id: "computer_on",
+    id: "computer_active",
     label: "Mainframe Computer (Active)",
     size: [1, 2, 1],
     collectable: false,
@@ -68,18 +74,28 @@ export const modelDefinitions = {
   tape: withDefaults({
     id: "tape",
     label: "Data Tape",
+    size: [1, 1, 1],
+    collectable: true,
+    solid: false,
+    description: "A reel of magnetic tape labeled 'System Boot'.", 
+    tags: ["item", "electronics"],
+  }),
+  teleport_pad: withDefaults({
+    id: "teleport_pad",
+    label: "Teleporter Pad",
     size: [1, 0.25, 1],
     collectable: true,
     solid: false,
     description: "A reel of magnetic tape labeled 'System Boot'.", 
     tags: ["item", "electronics"],
   }),
-  teleporter: withDefaults({
-    id: "teleporter",
-    label: "Teleporter Pad",
+  
+  teleport: withDefaults({
+    id: "teleport",
+    label: "Teleporter Device",
     size: [1, 2, 1],
     collectable: false,
-    solid: false,
+    solid: true,
     description: "A humming platform capable of quantum relocation.",
     tags: ["technology", "teleport"],
     defaultState: "idle",

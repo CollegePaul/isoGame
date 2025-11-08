@@ -73,6 +73,9 @@ function prepareVariants(scene) {
       size,
       baseOffset: resolvedBaseOffset,
       height: size[1] ?? height,
+      centerOffset: { x: center.x, y: center.y, z: center.z },
+      boundingBoxSize: { x: sizeVec.x, y: sizeVec.y, z: sizeVec.z },
+      localMin: { x: box.min.x, y: minY, z: box.min.z },
       template,
       createInstance: () => clone(template),
     };

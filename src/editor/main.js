@@ -1,8 +1,11 @@
 import {
   AmbientLight,
+  BoxGeometry,
   Color,
   DirectionalLight,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
@@ -15,6 +18,7 @@ import {
   Vector2,
   Vector3,
   WebGLRenderer,
+  WireframeGeometry,
 } from "three";
 import {
   eraseAt,
@@ -22,6 +26,7 @@ import {
   placeBlock,
   updateBlock,
   placeCrate,
+  updateCrate,
   placeDoor,
   placeObject,
   updateObject,
@@ -35,6 +40,8 @@ import {
   setWallThickness,
   setPlayer,
   setRoomId,
+  setAmbientColor,
+  setAmbientIntensity,
   subscribe,
   updateDoor,
   createRoom,
@@ -47,7 +54,7 @@ import { snapshotToJson, projectToJson as buildProjectJson } from "./serializer.
 import { getMaterial } from "../render/materials.js";
 import { calculateCameraPosition } from "../render/cameraRig.js";
 import { createBoxGeometryWithUVs, getAtlasDimensions, getAtlasTexture, getTileRect } from "../render/atlas.js";
-import { computeDoorDefinition } from "../data/doorRuntime.js";
+import { computeDoorDefinition, DEFAULT_DOOR_HEIGHT } from "../data/doorRuntime.js";
 import {
   blockPresets,
   getBlockPreset,
@@ -70,6 +77,8 @@ const BLOCK_VARIANTS = [
   { id: "block-1", label: "Single Height", height: 1, usage: "block" },
   { id: "block-2", label: "Double Height", height: 2, usage: "blockTall" },
 ];
+
+const MAX_BLOCK_LEVEL = 5;
 
 const LIGHT_VARIANTS = [
   { id: "neutral", label: "Neutral", color: "#ffffff", intensity: 1, height: 2 },
@@ -96,6 +105,9 @@ const gridDepthInput = document.getElementById("grid-depth");
 const wallHeightInput = document.getElementById("grid-wall-height");
 const wallThicknessInput = document.getElementById("grid-wall-thickness");
 const gridApplyButton = document.getElementById("apply-grid");
+const ambientColorInput = document.getElementById("ambient-color-input");
+const ambientIntensityInput = document.getElementById("ambient-intensity-input");
+const ambientIntensityValue = document.getElementById("ambient-intensity-value");
 const exportProjectButton = document.getElementById("export-project");
 const importProjectButton = document.getElementById("import-project");
 const exportOutput = document.getElementById("export-output");
@@ -118,6 +130,9 @@ if (
   !wallHeightInput ||
   !wallThicknessInput ||
   !gridApplyButton ||
+  !ambientColorInput ||
+  !ambientIntensityInput ||
+  !ambientIntensityValue ||
   !exportProjectButton ||
   !importProjectButton ||
   !exportOutput ||
@@ -169,13 +184,19 @@ function updateCamera() {
 updateCamera();
 
 const ambient = new AmbientLight(0xffffff, 0.65);
+ambient.name = "editor-ambient";
 scene.add(ambient);
 const keyLight = new DirectionalLight(0xffffff, 0.8);
+keyLight.name = "editor-key-light";
 keyLight.position.set(6, 10, 6);
 scene.add(keyLight);
 const fillLight = new DirectionalLight(0x8fb8ff, 0.35);
+fillLight.name = "editor-fill-light";
 fillLight.position.set(-6, 8, -4);
 scene.add(fillLight);
+const ambientReferenceIntensity = ambient.intensity || 0.65;
+const baseKeyLightIntensity = keyLight.intensity;
+const baseFillLightIntensity = fillLight.intensity;
 
 const geometryCache = new Map();
 
@@ -214,13 +235,15 @@ doorPlugMaterial.name = "doorPlugMaterial";
 const selectionOverlay = attachSelectionOverlay(scene);
 scene.add(floorGroup, wallGroup, blockGroup, doorGroup, crateGroup, objectGroup, lightGroup, playerGroup);
 
-const highlightMaterial = new MeshBasicMaterial({
-  color: 0xffffff,
+const highlightMaterial = new LineBasicMaterial({
+  color: 0x4c8bf5,
   transparent: true,
-  opacity: 0.25,
-  depthWrite: false,
+  opacity: 0.9,
 });
-const highlightMesh = new Mesh(getCachedBoxGeometry(1, 0.02, 1, { default: "floor" }), highlightMaterial);
+highlightMaterial.depthTest = false;
+highlightMaterial.depthWrite = false;
+const highlightGeometry = new WireframeGeometry(new BoxGeometry(1, 1, 1));
+const highlightMesh = new LineSegments(highlightGeometry, highlightMaterial);
 highlightMesh.visible = false;
 scene.add(highlightMesh);
 
@@ -228,6 +251,7 @@ const tileSelectionMesh = new Mesh(getCachedBoxGeometry(1, 0.02, 1, { default: "
 const lightIndicatorGeometry = new SphereGeometry(0.12, 16, 16);
 
 const PLAYER_HEIGHT = 1.6;
+const CRATE_HEIGHT = 0.9;
 const playerGeometry = getCachedBoxGeometry(0.8, PLAYER_HEIGHT, 0.8, {
   top: "blockTop",
   bottom: "blockSide",
@@ -247,12 +271,18 @@ const groundPlane = new Plane(new Vector3(0, 1, 0), 0);
 const intersectionPoint = new Vector3();
 
 const selectionHighlightMap = new Map();
+const blockHighlightKey = (x, z, level = 0) => `${x},${z},${level}`;
 
 let currentSnapshot = getSnapshot();
 let currentTool = toolSelect.value;
 let currentBlockPresetId = DEFAULT_BLOCK_PRESET_ID;
 let currentDoorOrientation = doorOrientationSelect.value || "north";
 let currentBlockVariant = BLOCK_VARIANTS[1];
+let currentBlockLevel = 0;
+let currentDoorLevel = 0;
+let currentCrateLevel = 0;
+let currentObjectLevel = 0;
+let currentLightLevel = 0;
 let currentObjectVariant = null;
 let currentLightVariant = LIGHT_VARIANTS[0];
 let objectVariants = [];
@@ -260,6 +290,16 @@ const objectVariantMap = new Map();
 let objectLibraryLoading = false;
 let objectLibraryError = null;
 doorOrientationSelect.value = currentDoorOrientation;
+let blockLevelInput = null;
+let blockLevelValue = null;
+let doorLevelInput = null;
+let doorLevelValue = null;
+let crateLevelInput = null;
+let crateLevelValue = null;
+let objectLevelInput = null;
+let objectLevelValue = null;
+let lightLevelInput = null;
+let lightLevelValue = null;
 let isRotating = false;
 let rotatePointerId = null;
 let rotateStart = { x: 0, y: 0, pan: cameraState.pan, tilt: cameraState.tilt };
@@ -286,6 +326,76 @@ function getUsageForTool(tool) {
       return "light";
     default:
       return null;
+  }
+}
+
+function getEffectivePlacementTool() {
+  return currentTool === "select" && currentSelection ? currentSelection.type : currentTool;
+}
+
+function clampLevelValue(level) {
+  return Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(level ?? 0)));
+}
+
+function getCurrentPlacementLevel() {
+  const tool = getEffectivePlacementTool();
+  switch (tool) {
+    case "block":
+      return clampLevelValue(currentBlockLevel);
+    case "crate":
+      return clampLevelValue(currentCrateLevel);
+    case "object":
+      return clampLevelValue(currentObjectLevel);
+    case "door":
+      return clampLevelValue(currentDoorLevel);
+    case "light":
+      return clampLevelValue(currentLightLevel);
+    case "player":
+      return 0;
+    case "floor":
+      return 0;
+    default:
+      if (currentSelection && typeof currentSelection.level === "number") {
+        return clampLevelValue(currentSelection.level);
+      }
+      return 0;
+  }
+}
+
+function getCurrentPlacementDimensions() {
+  const tool = getEffectivePlacementTool();
+  switch (tool) {
+    case "block": {
+      const height = currentBlockVariant?.height ?? 1;
+      return { width: 1, depth: 1, height };
+    }
+    case "crate":
+      return { width: CRATE_HEIGHT, depth: CRATE_HEIGHT, height: CRATE_HEIGHT };
+    case "object": {
+      let size = null;
+      if (currentObjectVariant?.size) {
+        size = currentObjectVariant.size;
+      } else if (currentSelection?.type === "object") {
+        size = currentSelection.size;
+      }
+      const fallback = Array.isArray(size) ? size : [1, 1, 1];
+      const width = Math.max(0.1, Number(fallback[0]) || 1);
+      const height = Math.max(0.25, Number(fallback[1]) || 1);
+      const depth = Math.max(0.1, Number(fallback[2]) || 1);
+      return { width, depth, height };
+    }
+    case "door":
+      return { width: 1, depth: 1, height: DEFAULT_DOOR_HEIGHT };
+    case "light": {
+      const height = currentLightVariant?.height ?? (currentSelection?.height ?? 2);
+      return { width: 0.35, depth: 0.35, height };
+    }
+    case "floor":
+      return { width: 1, depth: 1, height: 0.1 };
+    case "player":
+      return { width: 0.8, depth: 0.8, height: PLAYER_HEIGHT };
+    default:
+      return { width: 1, depth: 1, height: 1 };
   }
 }
 
@@ -426,6 +536,28 @@ gridApplyButton.addEventListener("click", () => {
   setWallThickness(Number(wallThicknessInput.value));
 });
 
+ambientColorInput.addEventListener("input", (event) => {
+  const value = normalizeColorForInput(event.target.value);
+  ambient.color.set(value);
+  setAmbientColor(value);
+});
+
+ambientIntensityInput.addEventListener("input", (event) => {
+  const value = clampAmbientIntensityValue(event.target.value);
+  ambientIntensityInput.value = value.toString();
+  if (ambientIntensityValue) {
+    ambientIntensityValue.textContent = value.toFixed(2);
+  }
+  ambient.intensity = value;
+  applyEditorLighting(value);
+});
+
+ambientIntensityInput.addEventListener("change", (event) => {
+  const value = clampAmbientIntensityValue(event.target.value);
+  setAmbientIntensity(value);
+  applyEditorLighting(value);
+});
+
 exportProjectButton.addEventListener("click", () => {
   const projectSnapshot = getProjectSnapshot();
   exportOutput.value = buildProjectJson(projectSnapshot);
@@ -564,8 +696,15 @@ renderer.domElement.addEventListener("pointermove", (event) => {
 
   const tile = pickTile(event);
   if (tile) {
+    const dims = getCurrentPlacementDimensions();
+    const level = getCurrentPlacementLevel();
+    const width = Math.max(0.05, Number(dims.width) || 1);
+    const height = Math.max(0.05, Number(dims.height) || 1);
+    const depth = Math.max(0.05, Number(dims.depth) || 1);
+    highlightMesh.scale.set(width, height, depth);
+    const centerY = level + height / 2;
     highlightMesh.visible = true;
-    highlightMesh.position.set(tile.worldPosition.x, 0.01, tile.worldPosition.z);
+    highlightMesh.position.set(tile.worldPosition.x, centerY, tile.worldPosition.z);
   } else {
     highlightMesh.visible = false;
   }
@@ -626,6 +765,17 @@ subscribe((snapshot) => {
   }
   if (document.activeElement !== roomIdInput) {
     roomIdInput.value = snapshot.roomId ?? "";
+  }
+  const ambientColor = normalizeColorForInput(snapshot.ambient?.color ?? ambientColorInput.value ?? "#ffffff");
+  if (ambientColorInput && document.activeElement !== ambientColorInput) {
+    ambientColorInput.value = ambientColor;
+  }
+  const ambientIntensity = clampAmbientIntensityValue(snapshot.ambient?.intensity ?? 0.65);
+  if (ambientIntensityInput && document.activeElement !== ambientIntensityInput) {
+    ambientIntensityInput.value = ambientIntensity.toString();
+  }
+  if (ambientIntensityValue) {
+    ambientIntensityValue.textContent = ambientIntensity.toFixed(2);
   }
   renderRoomList(snapshot);
   renderValidation(snapshot);
@@ -711,6 +861,21 @@ function renderToolVariants() {
     return;
   }
   toolVariantContainer.innerHTML = "";
+  blockLevelInput = null;
+  blockLevelValue = null;
+  doorLevelInput = null;
+  doorLevelValue = null;
+  crateLevelInput = null;
+  crateLevelValue = null;
+  objectLevelInput = null;
+  objectLevelValue = null;
+  lightLevelInput = null;
+  lightLevelValue = null;
+  currentBlockLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentBlockLevel)));
+  currentDoorLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentDoorLevel)));
+  currentCrateLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentCrateLevel)));
+  currentObjectLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentObjectLevel)));
+  currentLightLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentLightLevel)));
 
   const effectiveTool = currentTool === "select" && currentSelection ? currentSelection.type : currentTool;
 
@@ -730,13 +895,17 @@ function renderToolVariants() {
       }
       button.addEventListener("click", () => {
         currentBlockVariant = variant;
-        Array.from(toolVariantContainer.querySelectorAll("button")).forEach((btn) => {
-          btn.classList.toggle("selected", btn === button);
-        });
+        Array.from(toolVariantContainer.querySelectorAll("button"))
+          .filter((btn) => btn.type === "button")
+          .forEach((btn) => {
+            btn.classList.toggle("selected", btn === button);
+          });
         const selectedBlock =
           currentSelection && currentSelection.type === "block" ? currentSelection : null;
         if (selectedBlock) {
-          updateBlock(selectedBlock.x, selectedBlock.z, { height: variant.height ?? 1 });
+          updateBlock(selectedBlock.x, selectedBlock.z, selectedBlock.level ?? 0, {
+            height: variant.height ?? 1,
+          });
         } else {
           renderToolVariants();
           if (currentTool === "block") {
@@ -749,6 +918,112 @@ function renderToolVariants() {
     });
 
     toolVariantContainer.appendChild(wrapper);
+
+    const levelWrapper = document.createElement("div");
+    levelWrapper.className = "properties-field";
+    const levelLabel = document.createElement("span");
+    levelLabel.textContent = "Level";
+    const levelRow = document.createElement("div");
+    levelRow.className = "slider-row";
+    blockLevelInput = document.createElement("input");
+    blockLevelInput.type = "range";
+    blockLevelInput.min = "0";
+    blockLevelInput.max = String(MAX_BLOCK_LEVEL);
+    blockLevelInput.step = "1";
+    blockLevelInput.value = String(currentBlockLevel);
+    blockLevelValue = document.createElement("span");
+    blockLevelValue.className = "slider-value";
+    blockLevelValue.textContent = String(currentBlockLevel);
+    blockLevelInput.addEventListener("input", () => {
+      const parsed = Math.round(Number(blockLevelInput.value));
+      const clamped = Math.min(MAX_BLOCK_LEVEL, Math.max(0, parsed));
+      currentBlockLevel = clamped;
+      blockLevelInput.value = String(clamped);
+      blockLevelValue.textContent = String(clamped);
+    });
+    levelRow.append(blockLevelInput, blockLevelValue);
+    levelWrapper.append(levelLabel, levelRow);
+    toolVariantContainer.appendChild(levelWrapper);
+    return;
+  }
+
+  if (effectiveTool === "door") {
+    const levelWrapper = document.createElement("div");
+    levelWrapper.className = "properties-field";
+    const levelLabel = document.createElement("span");
+    levelLabel.textContent = "Level";
+    const levelRow = document.createElement("div");
+    levelRow.className = "slider-row";
+    doorLevelInput = document.createElement("input");
+    doorLevelInput.type = "range";
+    doorLevelInput.min = "0";
+    doorLevelInput.max = String(MAX_BLOCK_LEVEL);
+    doorLevelInput.step = "1";
+    doorLevelInput.value = String(currentDoorLevel);
+    doorLevelValue = document.createElement("span");
+    doorLevelValue.className = "slider-value";
+    doorLevelValue.textContent = String(currentDoorLevel);
+    doorLevelInput.addEventListener("input", () => {
+      const parsed = Math.round(Number(doorLevelInput.value));
+      const clamped = Math.min(MAX_BLOCK_LEVEL, Math.max(0, parsed));
+      currentDoorLevel = clamped;
+      doorLevelInput.value = String(clamped);
+      doorLevelValue.textContent = String(clamped);
+    });
+    doorLevelInput.addEventListener("change", () => {
+      if (currentSelection && currentSelection.type === "door") {
+        const previousLevel = currentSelection.level ?? 0;
+        const clamped = currentDoorLevel;
+        if (previousLevel !== clamped) {
+          updateDoor(currentSelection.x, currentSelection.z, previousLevel, { level: clamped });
+          currentSelection.level = clamped;
+          reconcileSelection();
+        }
+      }
+    });
+    levelRow.append(doorLevelInput, doorLevelValue);
+    levelWrapper.append(levelLabel, levelRow);
+    toolVariantContainer.appendChild(levelWrapper);
+    return;
+  }
+
+  if (effectiveTool === "crate") {
+    const levelWrapper = document.createElement("div");
+    levelWrapper.className = "properties-field";
+    const levelLabel = document.createElement("span");
+    levelLabel.textContent = "Level";
+    const levelRow = document.createElement("div");
+    levelRow.className = "slider-row";
+    crateLevelInput = document.createElement("input");
+    crateLevelInput.type = "range";
+    crateLevelInput.min = "0";
+    crateLevelInput.max = String(MAX_BLOCK_LEVEL);
+    crateLevelInput.step = "1";
+    crateLevelInput.value = String(currentCrateLevel);
+    crateLevelValue = document.createElement("span");
+    crateLevelValue.className = "slider-value";
+    crateLevelValue.textContent = String(currentCrateLevel);
+    crateLevelInput.addEventListener("input", () => {
+      const parsed = Math.round(Number(crateLevelInput.value));
+      const clamped = Math.min(MAX_BLOCK_LEVEL, Math.max(0, parsed));
+      currentCrateLevel = clamped;
+      crateLevelInput.value = String(clamped);
+      crateLevelValue.textContent = String(clamped);
+    });
+    crateLevelInput.addEventListener("change", () => {
+      if (currentSelection && currentSelection.type === "crate") {
+        const clamped = currentCrateLevel;
+        updateCrate(currentSelection.x, currentSelection.z, currentSelection.level ?? 0, {
+          level: clamped,
+          height: CRATE_HEIGHT,
+        });
+        currentSelection.level = clamped;
+        reconcileSelection();
+      }
+    });
+    levelRow.append(crateLevelInput, crateLevelValue);
+    levelWrapper.append(levelLabel, levelRow);
+    toolVariantContainer.appendChild(levelWrapper);
     return;
   }
 
@@ -791,19 +1066,64 @@ function renderToolVariants() {
         Array.from(toolVariantContainer.querySelectorAll("button")).forEach((btn) => {
           btn.classList.toggle("selected", btn === button);
         });
-      const selectedObject =
-        currentSelection && currentSelection.type === "object" ? currentSelection : null;
+        const selectedObject =
+          currentSelection && currentSelection.type === "object" ? currentSelection : null;
         if (selectedObject) {
-          updateObject(selectedObject.x, selectedObject.z, {
+          const baseOffset = variant.baseOffset ?? (variant.size?.[1] ?? 1) / 2;
+          const newLevel = selectedObject.level ?? currentObjectLevel ?? 0;
+          const newHeight = newLevel + baseOffset;
+          updateObject(selectedObject.x, selectedObject.z, selectedObject.level ?? 0, {
             presetId: variant.id,
-            height: variant.baseOffset ?? (variant.size?.[1] ?? 1) / 2,
+            height: newHeight,
             state: variant.defaultState ?? selectedObject.state ?? null,
+            size: Array.isArray(variant.size) ? [...variant.size] : null,
+            level: newLevel,
           });
         }
-    });
+      });
       wrapper.appendChild(button);
     });
     toolVariantContainer.appendChild(wrapper);
+    const levelWrapper = document.createElement("div");
+    levelWrapper.className = "properties-field";
+    const levelLabel = document.createElement("span");
+    levelLabel.textContent = "Level";
+    const levelRow = document.createElement("div");
+    levelRow.className = "slider-row";
+    objectLevelInput = document.createElement("input");
+    objectLevelInput.type = "range";
+    objectLevelInput.min = "0";
+    objectLevelInput.max = String(MAX_BLOCK_LEVEL);
+    objectLevelInput.step = "1";
+    objectLevelInput.value = String(currentObjectLevel);
+    objectLevelValue = document.createElement("span");
+    objectLevelValue.className = "slider-value";
+    objectLevelValue.textContent = String(currentObjectLevel);
+    objectLevelInput.addEventListener("input", () => {
+      const parsed = Math.round(Number(objectLevelInput.value));
+      const clamped = Math.min(MAX_BLOCK_LEVEL, Math.max(0, parsed));
+      currentObjectLevel = clamped;
+      objectLevelInput.value = String(clamped);
+      objectLevelValue.textContent = String(clamped);
+    });
+    objectLevelInput.addEventListener("change", () => {
+      if (currentSelection && currentSelection.type === "object") {
+        const clamped = currentObjectLevel;
+        const preset = currentObjectVariant ?? objectVariantMap.get(currentSelection.presetId);
+        const baseOffset = preset?.baseOffset ?? (preset?.size?.[1] ?? 1) / 2;
+        const newHeight = clamped + baseOffset;
+        updateObject(currentSelection.x, currentSelection.z, currentSelection.level ?? 0, {
+          level: clamped,
+          height: newHeight,
+        });
+        currentSelection.level = clamped;
+        currentSelection.height = newHeight;
+        reconcileSelection();
+      }
+    });
+    levelRow.append(objectLevelInput, objectLevelValue);
+    levelWrapper.append(levelLabel, levelRow);
+    toolVariantContainer.appendChild(levelWrapper);
     return;
   }
 
@@ -829,17 +1149,64 @@ function renderToolVariants() {
         const selectedLight =
           currentSelection && currentSelection.type === "light" ? currentSelection : null;
         if (selectedLight) {
-          updateLight(selectedLight.x, selectedLight.z, {
+          const baseHeight = variant.height ?? 2;
+          const newLevel = selectedLight.level ?? currentLightLevel ?? 0;
+          const newHeight = newLevel + baseHeight;
+          updateLight(selectedLight.x, selectedLight.z, selectedLight.level ?? 0, {
             presetId: variant.id,
             color: variant.color,
             intensity: variant.intensity,
-            height: variant.height,
+            height: newHeight,
+            level: newLevel,
           });
         }
       });
       wrapper.appendChild(button);
     });
     toolVariantContainer.appendChild(wrapper);
+    const levelWrapper = document.createElement("div");
+    levelWrapper.className = "properties-field";
+    const levelLabel = document.createElement("span");
+    levelLabel.textContent = "Level";
+    const levelRow = document.createElement("div");
+    levelRow.className = "slider-row";
+    lightLevelInput = document.createElement("input");
+    lightLevelInput.type = "range";
+    lightLevelInput.min = "0";
+    lightLevelInput.max = String(MAX_BLOCK_LEVEL);
+    lightLevelInput.step = "1";
+    lightLevelInput.value = String(currentLightLevel);
+    lightLevelValue = document.createElement("span");
+    lightLevelValue.className = "slider-value";
+    lightLevelValue.textContent = String(currentLightLevel);
+    lightLevelInput.addEventListener("input", () => {
+      const parsed = Math.round(Number(lightLevelInput.value));
+      const clamped = Math.min(MAX_BLOCK_LEVEL, Math.max(0, parsed));
+      currentLightLevel = clamped;
+      lightLevelInput.value = String(clamped);
+      lightLevelValue.textContent = String(clamped);
+    });
+    lightLevelInput.addEventListener("change", () => {
+      if (currentSelection && currentSelection.type === "light") {
+        const clamped = currentLightLevel;
+        const preset =
+          currentLightVariant ||
+          LIGHT_VARIANTS.find((entry) => entry.id === currentSelection.presetId) ||
+          LIGHT_VARIANTS[0];
+        const baseHeight = preset?.height ?? 2;
+        const newHeight = clamped + baseHeight;
+        updateLight(currentSelection.x, currentSelection.z, currentSelection.level ?? 0, {
+          level: clamped,
+          height: newHeight,
+        });
+        currentSelection.level = clamped;
+        currentSelection.height = newHeight;
+        reconcileSelection();
+      }
+    });
+    levelRow.append(lightLevelInput, lightLevelValue);
+    levelWrapper.append(levelLabel, levelRow);
+    toolVariantContainer.append(levelWrapper);
     return;
   }
 }
@@ -876,6 +1243,18 @@ function ensureObjectVariantsLoaded() {
 }
 
 function rebuildScene(snapshot) {
+  const ambientSettings = snapshot.ambient ?? {};
+  if (ambientSettings.color) {
+    ambient.color.set(ambientSettings.color);
+  } else {
+    ambient.color.set("#ffffff");
+  }
+  ambient.intensity =
+    typeof ambientSettings.intensity === "number" && Number.isFinite(ambientSettings.intensity)
+      ? ambientSettings.intensity
+      : 0.65;
+  applyEditorLighting(ambient.intensity);
+
   rebuildFloor(snapshot);
   rebuildWalls(snapshot);
   rebuildBlocks(snapshot);
@@ -987,14 +1366,16 @@ function rebuildBlocks(snapshot) {
       faceTiles = resolveFaceTiles(block.presetId ?? DEFAULT_BLOCK_PRESET_ID) || {};
     }
     const uvMap = descriptorsToUVMap(faceTiles);
-    const geometry = getCachedBoxGeometry(1, block.height ?? 1, 1, uvMap);
+    const blockHeight = block.height ?? 1;
+    const blockLevel = block.level ?? 0;
+    const geometry = getCachedBoxGeometry(1, blockHeight, 1, uvMap);
     const mesh = new Mesh(geometry, getMaterial("default"));
-    mesh.position.set(block.x - xOffset, (block.height ?? 1) / 2, block.z - zOffset);
+    mesh.position.set(block.x - xOffset, blockLevel + blockHeight / 2, block.z - zOffset);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData = { type: "block", payload: block };
     blockGroup.add(mesh);
-    highlights.set(`${block.x},${block.z}`, mesh);
+    highlights.set(blockHighlightKey(block.x, block.z, blockLevel), mesh);
   });
 }
 
@@ -1020,7 +1401,10 @@ function rebuildDoors(snapshot) {
       doorNode.add(mesh);
     });
     doorGroup.add(doorNode);
-    highlights.set(`${door.x},${door.z}`, doorNode);
+    highlights.set(
+      blockHighlightKey(door.x, door.z, door.level ?? 0),
+      doorNode,
+    );
   });
 }
 
@@ -1038,14 +1422,16 @@ function rebuildCrates(snapshot) {
       faceTiles = resolveFaceTiles(crate.presetId ?? DEFAULT_BLOCK_PRESET_ID) || {};
     }
     const uvMap = descriptorsToUVMap(faceTiles);
-    const geometry = getCachedBoxGeometry(0.9, 0.9, 0.9, uvMap);
+    const crateHeight = crate.height ?? CRATE_HEIGHT;
+    const geometry = getCachedBoxGeometry(0.9, crateHeight, 0.9, uvMap);
+    const level = crate.level ?? 0;
     const mesh = new Mesh(geometry, material);
-    mesh.position.set(crate.x - xOffset, 0.45, crate.z - zOffset);
+    mesh.position.set(crate.x - xOffset, level + crateHeight / 2, crate.z - zOffset);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData = { type: "crate", payload: crate };
     crateGroup.add(mesh);
-    highlights.set(`${crate.x},${crate.z}`, mesh);
+    highlights.set(blockHighlightKey(crate.x, crate.z, level), mesh);
   });
 }
 
@@ -1074,15 +1460,28 @@ function rebuildObjects(snapshot) {
     if (!mesh) {
       mesh = new Mesh(getCachedBoxGeometry(1, 1, 1, { default: "block" }), getMaterial("default"));
     }
-    const verticalOffset = object.height ?? variant?.baseOffset ?? (variant?.size?.[1] ?? 1) / 2;
-    mesh.position.set(object.x - xOffset, verticalOffset, object.z - zOffset);
+    const baseX = object.x - xOffset;
+    const baseZ = object.z - zOffset;
+    const storedSize = Array.isArray(object.size) && object.size.length >= 3 ? object.size : variant?.size ?? [1, 1, 1];
+    let baseY = object.height ?? variant?.baseOffset ?? storedSize[1] / 2;
+    let worldX = baseX;
+    let worldY = baseY;
+    let worldZ = baseZ;
+    if (variant?.centerOffset) {
+      worldX -= variant.centerOffset.x ?? 0;
+      worldY -= variant.centerOffset.y ?? 0;
+      worldZ -= variant.centerOffset.z ?? 0;
+    } else if (variant?.baseOffset) {
+      worldY -= variant.baseOffset;
+    }
+    mesh.position.set(worldX, worldY, worldZ);
     mesh.rotation.y = object.rotation ?? 0;
     mesh.userData = { type: "object", payload: { ...object } };
     if (variant) {
       mesh.userData.variant = variant;
     }
     objectGroup.add(mesh);
-    highlights.set(`${object.x},${object.z}`, mesh);
+    highlights.set(blockHighlightKey(object.x, object.z, object.level ?? 0), mesh);
   });
 }
 
@@ -1097,7 +1496,8 @@ function rebuildLights(snapshot) {
     const variant = getLightVariantById(light.presetId) ?? currentLightVariant ?? LIGHT_VARIANTS[0];
     const color = new Color(light.color ?? variant?.color ?? "#ffffff");
     const intensity = light.intensity ?? variant?.intensity ?? 1;
-    const height = light.height ?? variant?.height ?? 2;
+    const level = light.level ?? 0;
+    const height = light.height ?? level + (variant?.height ?? 2);
 
     const point = new PointLight(color, intensity, 10, 2);
     point.position.set(light.x - xOffset, height, light.z - zOffset);
@@ -1112,7 +1512,7 @@ function rebuildLights(snapshot) {
     group.userData = { type: "light", payload: { ...light }, variant };
 
     lightGroup.add(group);
-    highlights.set(`${light.x},${light.z}`, group);
+    highlights.set(blockHighlightKey(light.x, light.z, level), group);
   });
 }
 
@@ -1223,25 +1623,60 @@ function reconcileSelection() {
 }
 
 function resolveSelectionAt(snapshot, x, z) {
-  const block = snapshot.blocks.find((entry) => entry.x === x && entry.z === z);
-  if (block) {
-    return { type: "block", ...block };
+  const blocksAtTile = (snapshot.blocks ?? []).filter((entry) => entry.x === x && entry.z === z);
+  if (blocksAtTile.length > 0) {
+    const normalizedLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentBlockLevel)));
+    let blockMatch = blocksAtTile.find((entry) => (entry.level ?? 0) === normalizedLevel);
+    if (!blockMatch) {
+      blockMatch = blocksAtTile.reduce((best, candidate) =>
+        (candidate.level ?? 0) > (best?.level ?? -Infinity) ? candidate : best,
+      blocksAtTile[0]);
+    }
+    return { type: "block", ...blockMatch };
   }
-  const door = snapshot.doors?.find((entry) => entry.x === x && entry.z === z);
-  if (door) {
-    return { type: "door", ...door };
+  const doorsAtTile = (snapshot.doors ?? []).filter((entry) => entry.x === x && entry.z === z);
+  if (doorsAtTile.length > 0) {
+    const normalizedLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentDoorLevel)));
+    let doorMatch = doorsAtTile.find((entry) => (entry.level ?? 0) === normalizedLevel);
+    if (!doorMatch) {
+      doorMatch = doorsAtTile.reduce((best, candidate) =>
+        (candidate.level ?? 0) > (best?.level ?? -Infinity) ? candidate : best,
+      doorsAtTile[0]);
+    }
+    return { type: "door", ...doorMatch };
   }
-  const crate = snapshot.crates.find((entry) => entry.x === x && entry.z === z);
-  if (crate) {
-    return { type: "crate", ...crate };
+  const cratesAtTile = (snapshot.crates ?? []).filter((entry) => entry.x === x && entry.z === z);
+  if (cratesAtTile.length > 0) {
+    const normalizedLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentCrateLevel)));
+    let crateMatch = cratesAtTile.find((entry) => (entry.level ?? 0) === normalizedLevel);
+    if (!crateMatch) {
+      crateMatch = cratesAtTile.reduce((best, candidate) =>
+        (candidate.level ?? 0) > (best?.level ?? -Infinity) ? candidate : best,
+      cratesAtTile[0]);
+    }
+    return { type: "crate", ...crateMatch };
   }
-  const objectEntry = snapshot.objects?.find((entry) => entry.x === x && entry.z === z);
-  if (objectEntry) {
-    return { type: "object", ...objectEntry };
+  const objectsAtTile = (snapshot.objects ?? []).filter((entry) => entry.x === x && entry.z === z);
+  if (objectsAtTile.length > 0) {
+    const normalizedLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentObjectLevel)));
+    let objectMatch = objectsAtTile.find((entry) => (entry.level ?? 0) === normalizedLevel);
+    if (!objectMatch) {
+      objectMatch = objectsAtTile.reduce((best, candidate) =>
+        (candidate.level ?? 0) > (best?.level ?? -Infinity) ? candidate : best,
+      objectsAtTile[0]);
+    }
+    return { type: "object", ...objectMatch };
   }
-  const lightEntry = snapshot.lights?.find((entry) => entry.x === x && entry.z === z);
-  if (lightEntry) {
-    return { type: "light", ...lightEntry };
+  const lightsAtTile = (snapshot.lights ?? []).filter((entry) => entry.x === x && entry.z === z);
+  if (lightsAtTile.length > 0) {
+    const normalizedLevel = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentLightLevel)));
+    let lightMatch = lightsAtTile.find((entry) => (entry.level ?? 0) === normalizedLevel);
+    if (!lightMatch) {
+      lightMatch = lightsAtTile.reduce((best, candidate) =>
+        (candidate.level ?? 0) > (best?.level ?? -Infinity) ? candidate : best,
+      lightsAtTile[0]);
+    }
+    return { type: "light", ...lightMatch };
   }
   if (snapshot.player && snapshot.player.x === x && snapshot.player.z === z) {
     return { type: "player", ...snapshot.player };
@@ -1279,17 +1714,20 @@ function updateSelectionDetails(selection) {
   if (selection.type === "block") {
     container.appendChild(createInfoRow("Preset", selection.presetId ?? "—"));
     container.appendChild(createInfoRow("Height", selection.height));
+    container.appendChild(createInfoRow("Level", selection.level ?? 0));
     if (selection.tiles) {
       container.appendChild(createInfoRow("Tiles", formatTiles(selection.tiles)));
     }
   } else if (selection.type === "crate") {
     container.appendChild(createInfoRow("Preset", selection.presetId ?? "—"));
+    container.appendChild(createInfoRow("Level", selection.level ?? 0));
   } else if (selection.type === "object") {
     const variant = objectVariantMap.get(selection.presetId) || objectVariants.find((entry) => entry.id === selection.presetId) || null;
     container.appendChild(createInfoRow("Object", variant?.label ?? selection.presetId ?? "—"));
     if (variant?.description) {
       container.appendChild(createInfoRow("Info", variant.description));
     }
+    container.appendChild(createInfoRow("Level", selection.level ?? 0));
     container.appendChild(createInfoRow("Collectable", (variant?.collectable ?? false) ? "Yes" : "No"));
     container.appendChild(createInfoRow("Solid", (variant?.solid ?? true) ? "Yes" : "No"));
     if (variant?.requirements?.length) {
@@ -1307,19 +1745,8 @@ function updateSelectionDetails(selection) {
     if (variant?.description) {
       container.appendChild(createInfoRow("Info", variant.description));
     }
-    container.appendChild(createInfoRow("Color", (selection.color ?? variant?.color ?? "#ffffff").toUpperCase()));
-    container.appendChild(
-      createInfoRow(
-        "Intensity",
-        (selection.intensity ?? variant?.intensity ?? 1).toLocaleString(undefined, { maximumFractionDigits: 2 }),
-      ),
-    );
-    container.appendChild(
-      createInfoRow(
-        "Height",
-        (selection.height ?? variant?.height ?? 2).toLocaleString(undefined, { maximumFractionDigits: 2 }),
-      ),
-    );
+    container.appendChild(createInfoRow("Level", selection.level ?? 0));
+    container.appendChild(buildLightPropertiesForm(selection, variant));
   } else if (selection.type === "player") {
     container.appendChild(createInfoRow("Spawn", "Player"));
   } else if (selection.type === "door") {
@@ -1371,14 +1798,18 @@ function updateSelectionIndicators() {
     return;
   }
 
-  const key = `${currentSelection.x},${currentSelection.z}`;
-
   switch (currentSelection.type) {
     case "block":
     case "crate":
     case "door": {
       const map = selectionHighlightMap.get(currentSelection.type);
-      const mesh = map?.get(key);
+      const blockKey = blockHighlightKey(
+        currentSelection.x,
+        currentSelection.z,
+        currentSelection.level ?? 0,
+      );
+      const mesh =
+        map?.get(blockKey) ?? map?.get(`${currentSelection.x},${currentSelection.z}`);
       if (mesh) {
         selectionOverlay.updateSelection(mesh);
       }
@@ -1387,7 +1818,10 @@ function updateSelectionIndicators() {
     case "object":
     case "light": {
       const map = selectionHighlightMap.get(currentSelection.type);
-      const mesh = map?.get(key);
+      const mesh =
+        map?.get(
+          blockHighlightKey(currentSelection.x, currentSelection.z, currentSelection.level ?? 0),
+        ) ?? map?.get(`${currentSelection.x},${currentSelection.z}`);
       if (mesh) {
         selectionOverlay.updateSelection(mesh);
       }
@@ -1427,6 +1861,10 @@ function syncToolVariantWithSelection(selection) {
       currentTool = "block";
       toolSelect.value = "block";
     }
+    currentBlockLevel = Math.min(
+      MAX_BLOCK_LEVEL,
+      Math.max(0, Math.round(selection.level ?? currentBlockLevel ?? 0)),
+    );
     const desiredHeight = selection.height ?? 1;
     let match = BLOCK_VARIANTS.find((variant) => Math.abs((variant.height ?? 1) - desiredHeight) < 0.01);
     if (!match) {
@@ -1440,13 +1878,48 @@ function syncToolVariantWithSelection(selection) {
     }
     return;
   }
+  if (selection.type === "door") {
+    if (selectMode) {
+      currentTool = "door";
+      toolSelect.value = "door";
+    }
+    currentDoorLevel = Math.min(
+      MAX_BLOCK_LEVEL,
+      Math.max(0, Math.round(selection.level ?? currentDoorLevel ?? 0)),
+    );
+    if (selection.orientation) {
+      currentDoorOrientation = selection.orientation;
+      doorOrientationSelect.value = selection.orientation;
+    }
+    renderToolVariants();
+    return;
+  }
+  if (selection.type === "crate") {
+    if (selectMode) {
+      currentTool = "crate";
+      toolSelect.value = "crate";
+    }
+    currentCrateLevel = Math.min(
+      MAX_BLOCK_LEVEL,
+      Math.max(0, Math.round(selection.level ?? currentCrateLevel ?? 0)),
+    );
+    renderToolVariants();
+    return;
+  }
   if (selection.type === "object") {
     ensureObjectVariantsLoaded();
     if (selectMode) {
       currentTool = "object";
       toolSelect.value = "object";
     }
-    const variant = objectVariantMap.get(selection.presetId) || objectVariants.find((entry) => entry.id === selection.presetId) || currentObjectVariant;
+    currentObjectLevel = Math.min(
+      MAX_BLOCK_LEVEL,
+      Math.max(0, Math.round(selection.level ?? currentObjectLevel ?? 0)),
+    );
+    const variant =
+      objectVariantMap.get(selection.presetId) ||
+      objectVariants.find((entry) => entry.id === selection.presetId) ||
+      currentObjectVariant;
     if (!variant && objectVariants.length > 0) {
       currentObjectVariant = objectVariants[0];
     } else if (variant) {
@@ -1460,6 +1933,10 @@ function syncToolVariantWithSelection(selection) {
       currentTool = "light";
       toolSelect.value = "light";
     }
+    currentLightLevel = Math.min(
+      MAX_BLOCK_LEVEL,
+      Math.max(0, Math.round(selection.level ?? currentLightLevel ?? 0)),
+    );
     const variant = LIGHT_VARIANTS.find((entry) => entry.id === selection.presetId) || currentLightVariant;
     if (variant) {
       currentLightVariant = variant;
@@ -1481,10 +1958,13 @@ function placeBlockWithPreset(x, z, height) {
 
   const faceTiles = resolveFaceTiles(preset.id) || {};
   const tileIds = faceTilesToIdMap(faceTiles);
-  placeBlock(x, z, height, {
+  const blockHeight = height ?? currentBlockVariant?.height ?? 1;
+  const level = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentBlockLevel)));
+  placeBlock(x, z, blockHeight, {
     material: preset.id,
     tiles: tileIds,
     presetId: preset.id,
+    level,
   });
 }
 
@@ -1500,9 +1980,12 @@ function placeCrateWithPreset(x, z) {
 
   const faceTiles = resolveFaceTiles(preset.id) || {};
   const tileIds = faceTilesToIdMap(faceTiles);
+  const level = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentCrateLevel)));
   placeCrate(x, z, {
     presetId: preset.id,
     tiles: tileIds,
+    level,
+    height: CRATE_HEIGHT,
   });
 }
 
@@ -1519,11 +2002,16 @@ function placeObjectWithPreset(x, z) {
   if (!variant) {
     return;
   }
+  const level = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentObjectLevel)));
+  const baseOffset = variant.baseOffset ?? (variant.size?.[1] ?? 1) / 2;
+  const height = level + baseOffset;
   placeObject(x, z, {
     presetId: variant.id,
-    height: variant.baseOffset ?? (variant.size?.[1] ?? 1) / 2,
+    height,
     rotation: 0,
     state: variant.defaultState ?? null,
+    size: Array.isArray(variant.size) ? [...variant.size] : null,
+    level,
   });
 }
 
@@ -1532,11 +2020,14 @@ function placeLightWithPreset(x, z) {
     currentLightVariant = LIGHT_VARIANTS[0];
   }
   const variant = currentLightVariant;
+  const level = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentLightLevel)));
+  const height = level + (variant.height ?? 2);
   placeLight(x, z, {
     presetId: variant.id,
     color: variant.color,
     intensity: variant.intensity,
-    height: variant.height,
+    height,
+    level,
   });
 }
 
@@ -1566,9 +2057,11 @@ function placeFloorWithPreset(x, z) {
 }
 
 function placeDoorWithCurrentSettings(x, z) {
+  const level = Math.min(MAX_BLOCK_LEVEL, Math.max(0, Math.round(currentDoorLevel)));
   placeDoor(x, z, {
     orientation: currentDoorOrientation,
-    spawnId: `door-${x}-${z}-${currentDoorOrientation}-spawn`,
+    level,
+    spawnId: `door-${x}-${z}-${level}-${currentDoorOrientation}-spawn`,
   });
 }
 
@@ -1579,6 +2072,46 @@ function animate() {
 
 function clamp(min, max, value) {
   return Math.min(max, Math.max(min, value));
+}
+
+function applyEditorLighting(intensity) {
+  const ref = ambientReferenceIntensity > 0 ? ambientReferenceIntensity : 1;
+  const numeric = Number(intensity);
+  const clampedIntensity = Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+  const factor = clampedIntensity / ref;
+  keyLight.intensity = baseKeyLightIntensity * factor;
+  fillLight.intensity = baseFillLightIntensity * factor;
+}
+
+function normalizeColorForInput(value, fallback = "#ffffff") {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  let hex = value.trim();
+  if (!hex) {
+    return fallback;
+  }
+  if (!hex.startsWith("#")) {
+    hex = `#${hex}`;
+  }
+  const shortMatch = /^#([0-9a-fA-F]{3})$/.exec(hex);
+  if (shortMatch) {
+    const [r, g, b] = shortMatch[1].split("");
+    hex = `#${r}${r}${g}${g}${b}${b}`;
+  }
+  const fullMatch = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (fullMatch) {
+    return `#${fullMatch[1].toLowerCase()}`;
+  }
+  return fallback;
+}
+
+function clampAmbientIntensityValue(value, fallback = 0.65) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return Math.min(4, Math.max(0, Number(fallback) || 0.65));
+  }
+  return Math.min(4, Math.max(0, numeric));
 }
 
 function isPointerOverScrollableUI(event) {
@@ -1680,6 +2213,62 @@ function createInfoRow(label, value) {
   valueEl.textContent = value ?? "—";
   row.append(labelEl, valueEl);
   return row;
+}
+
+function withSelectedLightGroup(selection, callback) {
+  if (!selection || typeof callback !== "function") {
+    return;
+  }
+  const map = selectionHighlightMap.get("light");
+  if (!map) {
+    return;
+  }
+  const key = `${selection.x},${selection.z}`;
+  const group = map.get(key);
+  if (group) {
+    callback(group);
+  }
+}
+
+function previewLightColor(selection, color) {
+  withSelectedLightGroup(selection, (group) => {
+    group.children.forEach((child) => {
+      if (child.isLight) {
+        child.color.set(color);
+      } else if (child.isMesh && child.material && child.material.color) {
+        child.material.color.set(color);
+      }
+    });
+    if (group.userData?.payload) {
+      group.userData.payload.color = color;
+    }
+  });
+}
+
+function previewLightIntensity(selection, value) {
+  withSelectedLightGroup(selection, (group) => {
+    group.children.forEach((child) => {
+      if (child.isLight) {
+        child.intensity = value;
+      }
+    });
+    if (group.userData?.payload) {
+      group.userData.payload.intensity = value;
+    }
+  });
+}
+
+function previewLightHeight(selection, value) {
+  withSelectedLightGroup(selection, (group) => {
+    group.children.forEach((child) => {
+      if (child.position) {
+        child.position.y = value;
+      }
+    });
+    if (group.userData?.payload) {
+      group.userData.payload.height = value;
+    }
+  });
 }
 
 function createLabeledInput(label, value, onChange) {
@@ -1883,9 +2472,11 @@ function buildDoorPropertiesForm(selection) {
   container.className = "properties-door";
 
   const idField = createLabeledInput("Door ID", selection.id ?? "", (value) => {
-    updateDoor(selection.x, selection.z, { id: value.trim() });
+    updateDoor(selection.x, selection.z, selection.level ?? 0, { id: value.trim() });
   });
   container.appendChild(idField.wrapper);
+
+  container.appendChild(createInfoRow("Level", selection.level ?? 0));
 
   const orientationOptions = [
     { value: "north", label: "North (top wall)" },
@@ -1894,7 +2485,7 @@ function buildDoorPropertiesForm(selection) {
     { value: "east", label: "East (right wall)" },
   ];
   const orientationField = createLabeledSelect("Orientation", selection.orientation ?? "north", orientationOptions, (value) => {
-    updateDoor(selection.x, selection.z, { orientation: value });
+    updateDoor(selection.x, selection.z, selection.level ?? 0, { orientation: value });
     currentDoorOrientation = value;
     doorOrientationSelect.value = value;
   });
@@ -1906,7 +2497,7 @@ function buildDoorPropertiesForm(selection) {
   }
 
   const spawnIdField = createLabeledInput("Spawn ID", selection.spawnId ?? "", (value) => {
-    updateDoor(selection.x, selection.z, { spawnId: value.trim() });
+    updateDoor(selection.x, selection.z, selection.level ?? 0, { spawnId: value.trim() });
   });
   container.appendChild(spawnIdField.wrapper);
 
@@ -1914,7 +2505,7 @@ function buildDoorPropertiesForm(selection) {
   let targetDoorSelect = null;
   let targetSpawnFieldInput = null;
   const targetRoomField = createLabeledSelect("Target Room", selection.targetRoom ?? "", roomOptions, (value) => {
-    updateDoor(selection.x, selection.z, { targetRoom: value, targetDoor: "", targetSpawnId: "" });
+    updateDoor(selection.x, selection.z, selection.level ?? 0, { targetRoom: value, targetDoor: "", targetSpawnId: "" });
     updateDoorOptionsForRoom(targetDoorSelect, value, "");
     if (targetSpawnFieldInput) {
       targetSpawnFieldInput.value = "";
@@ -1925,7 +2516,7 @@ function buildDoorPropertiesForm(selection) {
   const targetDoorOptions = buildDoorOptions(selection.targetRoom ?? "");
   const targetDoorField = createLabeledSelect("Target Door", selection.targetDoor ?? "", targetDoorOptions, (value) => {
     const spawnId = getDoorSpawnId(targetRoomField.select.value, value);
-    updateDoor(selection.x, selection.z, { targetDoor: value, targetSpawnId: spawnId });
+    updateDoor(selection.x, selection.z, selection.level ?? 0, { targetDoor: value, targetSpawnId: spawnId });
     if (targetSpawnFieldInput) {
       targetSpawnFieldInput.value = spawnId ?? "";
     }
@@ -1935,7 +2526,7 @@ function buildDoorPropertiesForm(selection) {
   container.appendChild(targetDoorField.wrapper);
 
   const targetSpawnField = createLabeledInput("Target Spawn ID", selection.targetSpawnId ?? "", (value) => {
-    updateDoor(selection.x, selection.z, { targetSpawnId: value.trim() });
+    updateDoor(selection.x, selection.z, selection.level ?? 0, { targetSpawnId: value.trim() });
   });
   targetSpawnFieldInput = targetSpawnField.input;
   if (!selection.targetSpawnId && selection.targetRoom && selection.targetDoor) {
@@ -1953,12 +2544,101 @@ function buildDoorPropertiesForm(selection) {
   removeButton.className = "secondary";
   removeButton.textContent = "Remove Door";
   removeButton.addEventListener("click", () => {
-    removeDoor(selection.x, selection.z);
+    removeDoor(selection.x, selection.z, selection.level ?? null);
     currentSelection = null;
     updateSelectionDetails(null);
   });
   actions.appendChild(removeButton);
   container.appendChild(actions);
+
+  return container;
+}
+
+function buildLightPropertiesForm(selection, variant) {
+  const container = document.createElement("div");
+  container.className = "properties-light";
+
+  const colorWrapper = document.createElement("div");
+  colorWrapper.className = "properties-field";
+  const colorLabel = document.createElement("span");
+  colorLabel.textContent = "Color";
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  const initialColor = normalizeColorForInput(selection.color ?? variant?.color ?? "#ffffff", "#ffffff");
+  colorInput.value = initialColor;
+  colorInput.addEventListener("input", (event) => {
+    const value = normalizeColorForInput(event.target.value, initialColor);
+    previewLightColor(selection, value);
+  });
+  colorInput.addEventListener("change", (event) => {
+    const value = normalizeColorForInput(event.target.value, initialColor);
+    updateLight(selection.x, selection.z, selection.level ?? 0, { color: value });
+  });
+  colorWrapper.append(colorLabel, colorInput);
+  container.appendChild(colorWrapper);
+
+  const intensityWrapper = document.createElement("div");
+  intensityWrapper.className = "properties-field";
+  const intensityLabel = document.createElement("span");
+  intensityLabel.textContent = "Intensity";
+  const intensityRow = document.createElement("div");
+  intensityRow.className = "slider-row";
+  const intensitySlider = document.createElement("input");
+  intensitySlider.type = "range";
+  intensitySlider.min = "0";
+  intensitySlider.max = "4";
+  intensitySlider.step = "0.05";
+  const initialIntensity = clampAmbientIntensityValue(
+    selection.intensity ?? variant?.intensity ?? 1,
+    variant?.intensity ?? 1,
+  );
+  intensitySlider.value = initialIntensity.toString();
+  const intensityValueLabel = document.createElement("span");
+  intensityValueLabel.className = "slider-value";
+  intensityValueLabel.textContent = initialIntensity.toFixed(2);
+  intensitySlider.addEventListener("input", () => {
+    const value = clampAmbientIntensityValue(intensitySlider.value, initialIntensity);
+    intensitySlider.value = value.toString();
+    intensityValueLabel.textContent = value.toFixed(2);
+    previewLightIntensity(selection, value);
+  });
+  intensitySlider.addEventListener("change", () => {
+    const value = clampAmbientIntensityValue(intensitySlider.value, initialIntensity);
+    updateLight(selection.x, selection.z, selection.level ?? 0, { intensity: value });
+  });
+  intensityRow.append(intensitySlider, intensityValueLabel);
+  intensityWrapper.append(intensityLabel, intensityRow);
+  container.appendChild(intensityWrapper);
+
+  const heightWrapper = document.createElement("div");
+  heightWrapper.className = "properties-field";
+  const heightLabel = document.createElement("span");
+  heightLabel.textContent = "Height";
+  const heightRow = document.createElement("div");
+  heightRow.className = "slider-row";
+  const heightSlider = document.createElement("input");
+  heightSlider.type = "range";
+  heightSlider.min = "0";
+  heightSlider.max = "6";
+  heightSlider.step = "0.1";
+  const initialHeight = Number.isFinite(selection.height) ? selection.height : variant?.height ?? 2;
+  heightSlider.value = initialHeight.toString();
+  const heightValueLabel = document.createElement("span");
+  heightValueLabel.className = "slider-value";
+  heightValueLabel.textContent = Number(initialHeight).toFixed(2);
+  heightSlider.addEventListener("input", () => {
+    const value = Number(heightSlider.value);
+    heightValueLabel.textContent = value.toFixed(2);
+    previewLightHeight(selection, value);
+  });
+  heightSlider.addEventListener("change", () => {
+    const value = Number(heightSlider.value);
+    const level = selection.level ?? 0;
+    updateLight(selection.x, selection.z, level, { height: value, level });
+  });
+  heightRow.append(heightSlider, heightValueLabel);
+  heightWrapper.append(heightLabel, heightRow);
+  container.appendChild(heightWrapper);
 
   return container;
 }

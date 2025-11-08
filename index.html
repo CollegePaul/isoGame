@@ -31,6 +31,28 @@
         background: rgba(0, 0, 0, 0.45);
         font-size: 14px;
         letter-spacing: 0.05em;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .hud-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .hud-message {
+        font-size: 13px;
+        color: #f7d27f;
+        min-height: 18px;
+        opacity: 0;
+        transition: opacity 180ms ease;
+      }
+
+      .hud-message.visible {
+        opacity: 1;
       }
     </style>
   </head>

@@ -278,6 +278,23 @@
         gap: 8px;
       }
 
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .slider-row input[type="range"] {
+        flex: 1 1 auto;
+      }
+
+      .slider-value {
+        min-width: 48px;
+        text-align: right;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
       #room-select {
         border-radius: 6px;
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -387,6 +404,13 @@
           <h2>Room Settings</h2>
           <label class="sidebar-label" for="room-id-input">Room ID</label>
           <input id="room-id-input" type="text" spellcheck="false" autocomplete="off" />
+          <label class="sidebar-label" for="ambient-color-input">Ambient Color</label>
+          <input id="ambient-color-input" type="color" value="#ffffff" />
+          <label class="sidebar-label" for="ambient-intensity-input">Ambient Intensity</label>
+          <div class="slider-row">
+            <input id="ambient-intensity-input" type="range" min="0" max="2" step="0.05" value="0.65" />
+            <span id="ambient-intensity-value" class="slider-value">0.65</span>
+          </div>
         </div>
         <div class="sidebar-section">
           <h2>Door Placement</h2>

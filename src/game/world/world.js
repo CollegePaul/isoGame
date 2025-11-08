@@ -44,6 +44,7 @@ export class World {
     this.spawnPoint = new Vector3(0, 0.8, 0);
     this.spawnPoints = new Map();
     this.doorways = [];
+    this.ambientSettings = { color: "#ffffff", intensity: 0.65 };
   }
 
   loadRoom(roomBuilder) {
@@ -58,6 +59,7 @@ export class World {
       spawnId = "default",
       spawnPoints = new Map(),
       doorways = [],
+      ambient = null,
     } = builtRoom;
     meshes.forEach((mesh) => this.roomGroup.add(mesh));
     this.colliders.push(...colliders.map((item) => normalizeCollider(item)));
@@ -69,6 +71,9 @@ export class World {
       if (!this.spawnPoints.has("default")) {
         this.spawnPoints.set("default", this.spawnPoint.clone());
       }
+    }
+    if (ambient) {
+      this.ambientSettings = ambient;
     }
     return builtRoom;
   }

@@ -34,6 +34,7 @@ export function buildRoomFromData(roomData) {
   const doorways = [];
   const dynamicEntities = [];
   const spawnPoints = new Map();
+  const ambientSettings = normalizeAmbientLight(roomData.ambientLight ?? roomData.ambient);
 
   const tileSize = roomData.tileSize ?? DEFAULT_TILE_SIZE;
   const spawnPoint = vectorFromArray(roomData.spawn, new Vector3(0, 0.9, 0));
@@ -101,13 +102,111 @@ export function buildRoomFromData(roomData) {
   if (Array.isArray(roomData.objects) && roomData.objects.length > 0) {
     const objectGroup = new Group();
     meshes.push(objectGroup);
+
+    const pendingObjects = [];
+
+    roomData.objects.forEach((object, index) => {
+      const definition = getModelDefinition(object.presetId ?? object.id);
+      const worldPosition =
+        vectorFromArray(object.position, null) ?? new Vector3(object.x ?? 0, object.height ?? 0, object.z ?? 0);
+      const sizeArray =
+        object.size ?? definition?.size ?? [1, definition?.size?.[1] ?? 1, definition?.size?.[2] ?? 1];
+      const sizeVector = new Vector3(sizeArray[0] ?? 1, sizeArray[1] ?? 1, sizeArray[2] ?? 1);
+      const isCollectable = definition?.collectable ?? false;
+      const isSolid = definition?.solid ?? true;
+      const baseId = object.id ?? object.presetId ?? definition?.id ?? `object-${index}`;
+      const uniqueId = `${roomData.name ?? "room"}-${baseId}-${index}`;
+      const metadata = {
+        id: definition?.id ?? baseId,
+        label: definition?.label ?? baseId,
+        description: definition?.description ?? "",
+        collectable: Boolean(isCollectable),
+        solid: Boolean(isSolid && !isCollectable),
+        requirements: Array.isArray(definition?.requirements) ? [...definition.requirements] : [],
+        transformsTo: definition?.transformsTo ?? null,
+        defaultState: definition?.defaultState ?? "default",
+        interactions: definition?.interactions ?? null,
+        tags: Array.isArray(definition?.tags) ? [...definition.tags] : [],
+      };
+
+      const baseEntry = {
+        type: isCollectable ? "collectable" : "object",
+        id: uniqueId,
+        position: worldPosition.clone(),
+        size: sizeVector.clone(),
+        metadata,
+        mesh: null,
+        meshPosition: worldPosition.clone(),
+        state: object.state ?? metadata.defaultState,
+        collected: Boolean(object.collected ?? false),
+        room: roomData.name ?? null,
+        __listeners: [],
+      };
+      dynamicEntities.push(baseEntry);
+
+      let blocker = null;
+      let colliderEntry = null;
+      if (isSolid && !isCollectable) {
+        const blockerGeometry = createBoxGeometryWithUVs(sizeVector.x, sizeVector.y, sizeVector.z, { default: "wall" });
+        blocker = new Mesh(blockerGeometry, getMaterial("wall"));
+        blocker.visible = false;
+        blocker.position.copy(worldPosition);
+        objectGroup.add(blocker);
+
+        colliderEntry = {
+          center: worldPosition.clone(),
+          size: sizeVector.clone(),
+          axes: ["x", "y", "z"],
+          mask: defaultColliderMask,
+        };
+        colliders.push(colliderEntry);
+      }
+
+      pendingObjects.push({
+        object,
+        definition,
+        worldPosition,
+        sizeVector,
+        isCollectable,
+        isSolid,
+        uniqueId,
+        roomName: roomData.name ?? null,
+        baseEntry,
+        blocker,
+        colliderEntry,
+      });
+    });
+
     loadObjectLibrary()
       .then(() => getObjectVariants())
       .then((loadedVariants) => {
         const variantLookup = new Map(loadedVariants.map((variant) => [variant.id, variant]));
-        roomData.objects.forEach((object) => {
-          const definition = getModelDefinition(object.presetId ?? object.id);
+        pendingObjects.forEach(
+          ({
+            object,
+            definition,
+            worldPosition,
+            sizeVector,
+            isCollectable,
+            isSolid,
+            uniqueId,
+            roomName,
+            baseEntry,
+            blocker,
+            colliderEntry,
+          }) => {
           const variant = variantLookup.get(object.presetId ?? object.id) || loadedVariants[0] || null;
+          if (variant) {
+            baseEntry.centerOffset = variant.centerOffset
+              ? {
+                  x: variant.centerOffset.x ?? 0,
+                  y: variant.centerOffset.y ?? 0,
+                  z: variant.centerOffset.z ?? 0,
+                }
+              : null;
+            baseEntry.baseOffset =
+              typeof variant.baseOffset === "number" ? variant.baseOffset : baseEntry.baseOffset ?? null;
+          }
           let instance = null;
           if (variant) {
             instance = variant.createInstance();
@@ -121,34 +220,58 @@ export function buildRoomFromData(roomData) {
               node.receiveShadow = true;
             }
           });
-          const worldPosition = vectorFromArray(object.position, null) ?? new Vector3(object.x ?? 0, object.height ?? 0, object.z ?? 0);
           instance.position.copy(worldPosition);
+          if (variant?.centerOffset) {
+            instance.position.x -= variant.centerOffset.x ?? 0;
+            instance.position.y -= variant.centerOffset.y ?? 0;
+            instance.position.z -= variant.centerOffset.z ?? 0;
+          } else if (variant?.baseOffset) {
+            instance.position.y -= variant.baseOffset;
+          }
           instance.rotation.y = object.rotation ?? 0;
+          instance.userData.objectId = uniqueId;
+          instance.userData.presetId = object.presetId ?? object.id ?? variant?.id ?? definition?.id ?? null;
+          instance.userData.collectable = Boolean(isCollectable);
+          instance.userData.dynamicEntityId = uniqueId;
+
           objectGroup.add(instance);
-
-          const sizeArray = definition?.size ?? variant?.size ?? [1, variant?.height ?? 1, 1];
-          const colliderSize = new Vector3(sizeArray[0] ?? 1, sizeArray[1] ?? variant?.height ?? 1, sizeArray[2] ?? 1);
-          const colliderCenter = worldPosition.clone();
-          const isSolid = definition?.solid ?? variant?.solid ?? true;
-          if (isSolid) {
-            colliders.push({
-              center: colliderCenter,
-              size: colliderSize,
-              axes: ["x", "y", "z"],
-              mask: defaultColliderMask,
-            });
+          const centerPosition = worldPosition.clone();
+          const meshPosition = instance.position.clone();
+          if (baseEntry.position instanceof Vector3) {
+            baseEntry.position.copy(centerPosition);
+          } else {
+            baseEntry.position = centerPosition;
           }
-
-          if (definition?.collectable ?? variant?.collectable) {
-            dynamicEntities.push({
-              type: "collectable",
-              id: definition?.id ?? object.presetId ?? object.id,
-              position: colliderCenter.clone(),
-              size: colliderSize.clone(),
-              metadata: definition ?? null,
-            });
+          if (baseEntry.size instanceof Vector3) {
+            baseEntry.size.copy(sizeVector);
+          } else {
+            baseEntry.size = sizeVector.clone();
           }
-        });
+          if (baseEntry.meshPosition instanceof Vector3) {
+            baseEntry.meshPosition.copy(meshPosition);
+          } else {
+            baseEntry.meshPosition = meshPosition;
+          }
+          baseEntry.mesh = instance;
+          baseEntry.metadata = {
+            ...baseEntry.metadata,
+            id: definition?.id ?? variant?.id ?? baseEntry.metadata?.id ?? uniqueId,
+            label: definition?.label ?? variant?.label ?? baseEntry.metadata?.label ?? uniqueId,
+            description: definition?.description ?? variant?.description ?? baseEntry.metadata?.description ?? "",
+          };
+          if (blocker) {
+            blocker.position.copy(centerPosition);
+          }
+          if (colliderEntry?.center) {
+            colliderEntry.center.copy(centerPosition);
+          }
+          baseEntry.state = object.state ?? baseEntry.metadata?.defaultState ?? "default";
+          if (baseEntry.type === "collectable" && baseEntry.collected) {
+            instance.visible = false;
+          }
+          notifyDynamicEntry(baseEntry);
+        },
+        );
       })
       .catch((error) => {
         console.error("Failed to populate objects:", error);
@@ -188,7 +311,7 @@ export function buildRoomFromData(roomData) {
     });
   }
 
-  return { meshes, colliders, spawnPoint, spawnId, spawnPoints, doorways, dynamicEntities };
+  return { meshes, colliders, spawnPoint, spawnId, spawnPoints, doorways, dynamicEntities, ambient: ambientSettings };
 }
 
 function createPerimeterWalls({ width, depth, height, thickness, tileSize }) {
@@ -606,4 +729,29 @@ function vectorFromArray(array, fallback) {
     return fallback instanceof Vector3 ? fallback.clone() : fallback;
   }
   return new Vector3(array[0], array[1], array[2]);
+}
+
+function notifyDynamicEntry(entry) {
+  if (!entry || !Array.isArray(entry.__listeners)) {
+    return;
+  }
+  entry.__listeners.forEach((listener) => {
+    try {
+      listener(entry);
+    } catch (error) {
+      console.error("Dynamic entity listener error:", error);
+    }
+  });
+}
+
+function normalizeAmbientLight(definition) {
+  const color =
+    typeof definition?.color === "string" && definition.color.trim()
+      ? definition.color
+      : "#ffffff";
+  const intensity =
+    typeof definition?.intensity === "number" && Number.isFinite(definition.intensity)
+      ? definition.intensity
+      : 0.65;
+  return { color, intensity };
 }

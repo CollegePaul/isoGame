@@ -1,5 +1,7 @@
 import { getTileByCoord } from "../data/tiles.js";
 import { getDefaultPresetIdForUsage, resolveFaceTiles } from "../data/blockPresets.js";
+import { getModelDefinition } from "../data/models.js";
+import { DEFAULT_DOOR_HEIGHT } from "../data/doorRuntime.js";
 
 const listeners = new Set();
 
@@ -10,6 +12,8 @@ const DEFAULT_SPAWN = [0, 0.9, 0];
 const DEFAULT_FLOOR_PRESET_ID = getDefaultPresetIdForUsage("floor");
 const DEFAULT_WALL_HEIGHT = 3;
 const DEFAULT_WALL_THICKNESS = 0.25;
+const DEFAULT_BLOCK_LEVEL = 0;
+const CRATE_SIZE = 0.9;
 
 function createEmptyRoom(roomId, width = DEFAULT_WIDTH, depth = DEFAULT_DEPTH) {
   return {
@@ -18,6 +22,8 @@ function createEmptyRoom(roomId, width = DEFAULT_WIDTH, depth = DEFAULT_DEPTH) {
     depth,
     spawnId: `${roomId}-spawn`,
     spawn: [...DEFAULT_SPAWN],
+    ambientColor: "#ffffff",
+    ambientIntensity: 0.65,
     blocks: new Map(),
     crates: new Map(),
     doors: new Map(),
@@ -67,10 +73,11 @@ export function getSnapshot() {
     };
   });
   const blocks = Array.from(room.blocks.entries()).map(([key, value]) => {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z, level } = parseBlockKey(key);
     return {
       x,
       z,
+      level,
       height: value.height,
       material: value.material,
       tiles: value.tiles,
@@ -79,33 +86,38 @@ export function getSnapshot() {
   });
 
   const crates = Array.from(room.crates.entries()).map(([key, value]) => {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z, level } = parseBlockKey(key);
     const data = value && typeof value === "object" ? value : {};
     return {
       x,
       z,
+      level,
       presetId: data.presetId ?? null,
       tiles: data.tiles ?? {},
+      height: data.height ?? CRATE_SIZE,
     };
   });
 
   const objects = Array.from(room.objects.entries()).map(([key, value]) => {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z, level } = parseBlockKey(key);
     return {
       x,
       z,
+      level,
       presetId: value.presetId ?? null,
       rotation: value.rotation ?? 0,
       height: value.height ?? 0,
       state: value.state ?? null,
+      size: Array.isArray(value.size) ? [...value.size] : null,
     };
   });
 
   const lights = Array.from(room.lights.entries()).map(([key, value]) => {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z, level } = parseBlockKey(key);
     return {
       x,
       z,
+      level,
       presetId: value.presetId ?? null,
       color: value.color ?? "#ffffff",
       intensity: value.intensity ?? 1,
@@ -114,10 +126,11 @@ export function getSnapshot() {
   });
 
   const doors = Array.from(room.doors.entries()).map(([key, value]) => {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z, level } = parseDoorKey(key);
     return {
       x,
       z,
+      level,
       id: value.id,
       orientation: value.orientation,
       targetRoom: value.targetRoom,
@@ -140,6 +153,10 @@ export function getSnapshot() {
       tiles: floorTiles,
       height: 0.125,
       material: "floor",
+    },
+    ambient: {
+      color: room.ambientColor ?? "#ffffff",
+      intensity: room.ambientIntensity ?? 0.65,
     },
     wallHeight: room.wallHeight ?? DEFAULT_WALL_HEIGHT,
     wallThickness: room.wallThickness ?? DEFAULT_WALL_THICKNESS,
@@ -172,14 +189,14 @@ export function setGridSize(width, depth) {
   room.depth = d;
 
   for (const key of [...room.blocks.keys()]) {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z } = parseBlockKey(key);
     if (x >= w || z >= d) {
       room.blocks.delete(key);
     }
   }
 
   for (const key of [...room.crates.keys()]) {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z } = parseBlockKey(key);
     if (x >= w || z >= d) {
       room.crates.delete(key);
     }
@@ -200,14 +217,14 @@ export function setGridSize(width, depth) {
   }
 
   for (const key of [...room.objects.keys()]) {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z } = parseBlockKey(key);
     if (x >= w || z >= d) {
       room.objects.delete(key);
     }
   }
 
   for (const key of [...room.lights.keys()]) {
-    const [x, z] = key.split(",").map(Number);
+    const { x, z } = parseBlockKey(key);
     if (x >= w || z >= d) {
       room.lights.delete(key);
     }
@@ -245,25 +262,30 @@ export function placeBlock(x, z, height, properties = {}) {
     return;
   }
   const room = getCurrentRoom();
-  room.blocks.set(keyOf(x, z), {
-    height,
+  const level = normalizeBlockLevel(properties.level);
+  const key = blockKeyOf(x, z, level);
+  const resolvedHeight = Math.max(0.25, Math.min(5, Number(height) || 1));
+  room.blocks.set(key, {
+    level,
+    height: resolvedHeight,
     material: properties.material,
     tiles: properties.tiles,
     presetId: properties.presetId,
   });
-  room.crates.delete(keyOf(x, z));
-  room.doors.delete(keyOf(x, z));
-  room.objects.delete(keyOf(x, z));
-  room.lights.delete(keyOf(x, z));
+  deleteCratesAtTile(room, x, z, level);
+  deleteDoorsAtTile(room, x, z, level);
+  deleteObjectsAtTile(room, x, z, level);
+  deleteLightsAtTile(room, x, z, level);
   notify();
 }
 
-export function updateBlock(x, z, updates = {}) {
+export function updateBlock(x, z, level, updates = {}) {
   if (!isInBounds(x, z)) {
     return;
   }
   const room = getCurrentRoom();
-  const key = keyOf(x, z);
+  const normalizedLevel = normalizeBlockLevel(level);
+  const key = blockKeyOf(x, z, normalizedLevel);
   const current = room.blocks.get(key);
   if (!current) {
     return;
@@ -275,7 +297,14 @@ export function updateBlock(x, z, updates = {}) {
   if (typeof next.height === "number") {
     next.height = Math.max(0.25, Math.min(5, next.height));
   }
-  room.blocks.set(key, next);
+  let targetLevel = normalizeBlockLevel(next.level ?? normalizedLevel);
+  next.level = targetLevel;
+  if (targetLevel !== normalizedLevel) {
+    room.blocks.delete(key);
+    room.blocks.set(blockKeyOf(x, z, targetLevel), next);
+  } else {
+    room.blocks.set(key, next);
+  }
   notify();
 }
 
@@ -284,14 +313,48 @@ export function placeCrate(x, z, properties = {}) {
     return;
   }
   const room = getCurrentRoom();
-  room.crates.set(keyOf(x, z), {
+  const level = normalizeBlockLevel(properties.level);
+  const key = blockKeyOf(x, z, level);
+  const crateHeight = Math.max(0.25, Number(properties.height) || CRATE_SIZE);
+  const entry = {
+    level,
     presetId: properties.presetId ?? null,
     tiles: properties.tiles ?? {},
-  });
-  room.blocks.delete(keyOf(x, z));
-  room.doors.delete(keyOf(x, z));
-  room.objects.delete(keyOf(x, z));
-  room.lights.delete(keyOf(x, z));
+    height: crateHeight,
+  };
+  room.crates.set(key, entry);
+  deleteDoorsAtTile(room, x, z, level);
+  notify();
+}
+
+export function updateCrate(x, z, level, updates = {}) {
+  const room = getCurrentRoom();
+  const currentLevel = normalizeBlockLevel(level ?? DEFAULT_BLOCK_LEVEL);
+  const key = blockKeyOf(x, z, currentLevel);
+  const current = room.crates.get(key);
+  if (!current) {
+    return;
+  }
+  const next = {
+    ...current,
+    ...updates,
+  };
+  if (Array.isArray(next.size)) {
+    next.size = [...next.size];
+  }
+  let targetLevel = normalizeBlockLevel(next.level ?? currentLevel);
+  next.level = targetLevel;
+  if (typeof next.height !== "number" || !Number.isFinite(next.height)) {
+    const baseOffset = (current.height ?? currentLevel + 2) - currentLevel;
+    next.height = targetLevel + baseOffset;
+  }
+  const targetKey = blockKeyOf(x, z, targetLevel);
+  if (targetLevel !== currentLevel) {
+    room.crates.delete(key);
+    room.crates.set(targetKey, next);
+  } else {
+    room.crates.set(key, next);
+  }
   notify();
 }
 
@@ -300,27 +363,61 @@ export function placeObject(x, z, properties = {}) {
     return;
   }
   const room = getCurrentRoom();
-  room.objects.set(keyOf(x, z), {
+  const level = normalizeBlockLevel(properties.level);
+  const key = blockKeyOf(x, z, level);
+  const resolvedSize = Array.isArray(properties.size)
+    ? properties.size.map((value) => Number(value) || 0)
+    : null;
+  const sizeY = resolvedSize ? resolvedSize[1] ?? 1 : 1;
+  const centerHeight =
+    typeof properties.height === "number" && Number.isFinite(properties.height)
+      ? properties.height
+      : level + sizeY / 2;
+  room.objects.set(key, {
+    level,
     presetId: properties.presetId ?? null,
     rotation: properties.rotation ?? 0,
-    height: properties.height ?? 0,
+    height: centerHeight,
     state: properties.state ?? null,
+    size: resolvedSize ? [...resolvedSize] : null,
   });
-  room.blocks.delete(keyOf(x, z));
-  room.crates.delete(keyOf(x, z));
-  room.doors.delete(keyOf(x, z));
-  room.lights.delete(keyOf(x, z));
   notify();
 }
 
-export function updateObject(x, z, updates = {}) {
+export function updateObject(x, z, level, updates = {}) {
   const room = getCurrentRoom();
-  const key = keyOf(x, z);
+  const currentLevel = normalizeBlockLevel(level ?? DEFAULT_BLOCK_LEVEL);
+  const key = blockKeyOf(x, z, currentLevel);
   const current = room.objects.get(key);
   if (!current) {
     return;
   }
-  room.objects.set(key, { ...current, ...updates });
+  const next = {
+    ...current,
+    ...updates,
+  };
+  if (Array.isArray(next.size)) {
+    next.size = [...next.size];
+  } else if (Array.isArray(current.size)) {
+    next.size = [...current.size];
+  }
+  let targetLevel = normalizeBlockLevel(next.level ?? currentLevel);
+  next.level = targetLevel;
+  const sizeY = Array.isArray(next.size) ? Number(next.size[1]) || 1 : 1;
+  if (typeof next.height !== "number" || !Number.isFinite(next.height)) {
+    const baseOffset = (current.height ?? currentLevel + sizeY / 2) - currentLevel;
+    next.height = targetLevel + baseOffset;
+  }
+  if (typeof next.height === "number") {
+    next.height = Math.max(0.25, next.height);
+  }
+  const targetKey = blockKeyOf(x, z, targetLevel);
+  if (targetLevel !== currentLevel) {
+    room.objects.delete(key);
+    room.objects.set(targetKey, next);
+  } else {
+    room.objects.set(key, next);
+  }
   notify();
 }
 
@@ -329,26 +426,42 @@ export function placeLight(x, z, properties = {}) {
     return;
   }
   const room = getCurrentRoom();
-  room.lights.set(keyOf(x, z), {
+  const level = normalizeBlockLevel(properties.level);
+  const key = blockKeyOf(x, z, level);
+  room.lights.set(key, {
+    level,
     presetId: properties.presetId ?? null,
     color: properties.color ?? "#ffffff",
     intensity: properties.intensity ?? 1,
-    height: properties.height ?? 2,
+    height: properties.height ?? level + 2,
   });
-  room.blocks.delete(keyOf(x, z));
-  room.crates.delete(keyOf(x, z));
-  room.objects.delete(keyOf(x, z));
   notify();
 }
 
-export function updateLight(x, z, updates = {}) {
+export function updateLight(x, z, level, updates = {}) {
   const room = getCurrentRoom();
-  const key = keyOf(x, z);
+  const currentLevel = normalizeBlockLevel(level ?? DEFAULT_BLOCK_LEVEL);
+  const key = blockKeyOf(x, z, currentLevel);
   const current = room.lights.get(key);
   if (!current) {
     return;
   }
-  room.lights.set(key, { ...current, ...updates });
+  const next = {
+    ...current,
+    ...updates,
+  };
+  if (typeof next.height === "number" && !Number.isFinite(next.height)) {
+    next.height = current.height ?? (current.level ?? 0) + 2;
+  }
+  let targetLevel = normalizeBlockLevel(next.level ?? currentLevel);
+  next.level = targetLevel;
+  const targetKey = blockKeyOf(x, z, targetLevel);
+  if (targetLevel !== currentLevel) {
+    room.lights.delete(key);
+    room.lights.set(targetKey, next);
+  } else {
+    room.lights.set(key, next);
+  }
   notify();
 }
 
@@ -414,16 +527,17 @@ export function setPlayer(x, z) {
   notify();
 }
 
-export function eraseAt(x, z) {
+export function eraseAt(x, z, level = null) {
   if (!isInBounds(x, z)) {
     return;
   }
   const room = getCurrentRoom();
-  room.blocks.delete(keyOf(x, z));
-  room.crates.delete(keyOf(x, z));
-  room.doors.delete(keyOf(x, z));
-  room.objects.delete(keyOf(x, z));
-  room.lights.delete(keyOf(x, z));
+  const levelArg = level === null || level === undefined ? null : normalizeBlockLevel(level);
+  deleteBlocksAtTile(room, x, z, levelArg);
+  deleteCratesAtTile(room, x, z, levelArg);
+  deleteObjectsAtTile(room, x, z, levelArg);
+  deleteLightsAtTile(room, x, z, levelArg);
+  deleteDoorsAtTile(room, x, z, levelArg);
   if (room.player && room.player.x === x && room.player.z === z) {
     room.player = null;
   }
@@ -450,6 +564,26 @@ export function setRoomId(roomId) {
   notify();
 }
 
+export function setAmbientColor(color) {
+  const room = getCurrentRoom();
+  const normalised = normalizeHexColor(color, room.ambientColor ?? "#ffffff");
+  if (room.ambientColor === normalised) {
+    return;
+  }
+  room.ambientColor = normalised;
+  notify();
+}
+
+export function setAmbientIntensity(intensity) {
+  const room = getCurrentRoom();
+  const clamped = clampAmbientIntensity(intensity, room.ambientIntensity ?? 0.65);
+  if (room.ambientIntensity === clamped) {
+    return;
+  }
+  room.ambientIntensity = clamped;
+  notify();
+}
+
 export function createRoom(roomId) {
   const base = roomId && roomId.trim() ? roomId.trim() : `room-${state.rooms.size + 1}`;
   const uniqueId = generateUniqueRoomId(base);
@@ -473,41 +607,75 @@ export function placeDoor(x, z, properties = {}) {
     return;
   }
   const room = getCurrentRoom();
-  const key = keyOf(x, z);
-  const existing = room.doors.get(key) ?? {};
-  room.blocks.delete(key);
-  room.crates.delete(key);
-  room.objects.delete(key);
-  room.lights.delete(key);
-  const orientation = properties.orientation ?? existing.orientation ?? "north";
-  const openingWidth = properties.openingWidth ?? existing.openingWidth ?? 1;
-  const lintelHeight = properties.lintelHeight ?? existing.lintelHeight ?? 0.5;
-  const material = properties.material ?? existing.material ?? "door";
+  const requestedLevel = normalizeBlockLevel(
+    properties.level ?? DEFAULT_BLOCK_LEVEL,
+  );
+  let existingEntry = room.doors.get(doorKeyOf(x, z, requestedLevel)) ?? null;
+  let existingKey = existingEntry ? doorKeyOf(x, z, existingEntry.level ?? requestedLevel) : null;
+  if (!existingEntry) {
+    for (const [entryKey, door] of room.doors.entries()) {
+      const info = parseDoorKey(entryKey);
+      if (info.x === x && info.z === z) {
+        existingEntry = door;
+        existingKey = entryKey;
+        break;
+      }
+    }
+  }
+  const level = normalizeBlockLevel(properties.level ?? existingEntry?.level ?? DEFAULT_BLOCK_LEVEL);
+  const key = doorKeyOf(x, z, level);
+
+  if (existingKey && existingKey !== key) {
+    room.doors.delete(existingKey);
+  }
+
+  deleteBlocksAtTile(room, x, z, level);
+  deleteCratesAtTile(room, x, z, level);
+  deleteObjectsAtTile(room, x, z, level);
+  deleteLightsAtTile(room, x, z, level);
+
+  const orientation = properties.orientation ?? existingEntry?.orientation ?? "north";
+  const openingWidth = properties.openingWidth ?? existingEntry?.openingWidth ?? 1;
+  const lintelHeight = properties.lintelHeight ?? existingEntry?.lintelHeight ?? 0.5;
+  const material = properties.material ?? existingEntry?.material ?? "door";
   const id =
     properties.id ??
-    existing.id ??
-    `door-${state.currentRoomId}-${x}-${z}-${orientation}`;
-  const spawnId = properties.spawnId ?? existing.spawnId ?? `${id}-spawn`;
-  const targetSpawnId = properties.targetSpawnId ?? existing.targetSpawnId ?? "";
+    existingEntry?.id ??
+    `door-${state.currentRoomId}-${x}-${z}-${level}-${orientation}`;
+  const spawnId = properties.spawnId ?? existingEntry?.spawnId ?? `${id}-spawn`;
+  const targetSpawnId = properties.targetSpawnId ?? existingEntry?.targetSpawnId ?? "";
 
   room.doors.set(key, {
     id,
     orientation,
-    targetRoom: properties.targetRoom ?? existing.targetRoom ?? "",
-    targetDoor: properties.targetDoor ?? existing.targetDoor ?? "",
+    targetRoom: properties.targetRoom ?? existingEntry?.targetRoom ?? "",
+    targetDoor: properties.targetDoor ?? existingEntry?.targetDoor ?? "",
     openingWidth,
     lintelHeight,
     material,
     spawnId,
     targetSpawnId,
+    level,
   });
   notify();
 }
 
-export function updateDoor(x, z, updates = {}) {
+export function updateDoor(x, z, level, updates = {}) {
   const room = getCurrentRoom();
-  const key = keyOf(x, z);
-  const current = room.doors.get(key);
+  const initialLevel = normalizeBlockLevel(level ?? DEFAULT_BLOCK_LEVEL);
+  const key = doorKeyOf(x, z, initialLevel);
+  let current = room.doors.get(key);
+  let currentKey = key;
+  if (!current) {
+    for (const [entryKey, door] of room.doors.entries()) {
+      const info = parseDoorKey(entryKey);
+      if (info.x === x && info.z === z) {
+        current = door;
+        currentKey = entryKey;
+        break;
+      }
+    }
+  }
   if (!current) {
     return;
   }
@@ -516,18 +684,35 @@ export function updateDoor(x, z, updates = {}) {
     ...updates,
   };
 
+  if (typeof updated.level === "number") {
+    updated.level = normalizeBlockLevel(updated.level);
+  } else if (typeof current.level === "number") {
+    updated.level = normalizeBlockLevel(current.level);
+  } else {
+    updated.level = initialLevel;
+  }
+
   const hasCustomSpawnId = current.spawnId && !current.spawnId.startsWith(`${current.id}-spawn`);
   if (!updates.spawnId && !hasCustomSpawnId) {
     updated.spawnId = `${updated.id}-spawn`;
   }
 
-  room.doors.set(key, updated);
+  const nextKey = doorKeyOf(x, z, updated.level ?? initialLevel);
+  if (currentKey !== nextKey) {
+    room.doors.delete(currentKey);
+  }
+  room.doors.set(nextKey, updated);
   notify();
 }
 
-export function removeDoor(x, z) {
+export function removeDoor(x, z, level = null) {
   const room = getCurrentRoom();
-  const key = keyOf(x, z);
+  if (level === null || level === undefined) {
+    deleteDoorsAtTile(room, x, z, null);
+    notify();
+    return;
+  }
+  const key = doorKeyOf(x, z, normalizeBlockLevel(level));
   if (room.doors.delete(key)) {
     notify();
   }
@@ -560,11 +745,16 @@ export function getProjectSnapshot() {
       wallThickness: room.wallThickness ?? DEFAULT_WALL_THICKNESS,
       spawnId: room.spawnId,
       spawn: room.spawn ? [...room.spawn] : [...DEFAULT_SPAWN],
+      ambient: {
+        color: room.ambientColor ?? "#ffffff",
+        intensity: room.ambientIntensity ?? 0.65,
+      },
       blocks: Array.from(room.blocks.entries()).map(([key, value]) => {
-        const [x, z] = key.split(",").map(Number);
+        const { x, z, level } = parseBlockKey(key);
         return {
           x,
           z,
+          level,
           height: value.height,
           material: value.material,
           tiles: value.tiles,
@@ -572,31 +762,36 @@ export function getProjectSnapshot() {
         };
       }),
       crates: Array.from(room.crates.entries()).map(([key, value]) => {
-        const [x, z] = key.split(",").map(Number);
+        const { x, z, level } = parseBlockKey(key);
         const data = value && typeof value === "object" ? value : {};
         return {
           x,
           z,
+          level,
           presetId: data.presetId ?? null,
           tiles: data.tiles ?? {},
+          height: data.height ?? CRATE_SIZE,
         };
       }),
       objects: Array.from(room.objects.entries()).map(([key, value]) => {
-        const [x, z] = key.split(",").map(Number);
+        const { x, z, level } = parseBlockKey(key);
         return {
           x,
           z,
+          level,
           presetId: value.presetId ?? null,
           rotation: value.rotation ?? 0,
           height: value.height ?? 0,
           state: value.state ?? null,
+          size: Array.isArray(value.size) ? [...value.size] : null,
         };
       }),
       lights: Array.from(room.lights.entries()).map(([key, value]) => {
-        const [x, z] = key.split(",").map(Number);
+        const { x, z, level } = parseBlockKey(key);
         return {
           x,
           z,
+          level,
           presetId: value.presetId ?? null,
           color: value.color ?? "#ffffff",
           intensity: value.intensity ?? 1,
@@ -604,10 +799,11 @@ export function getProjectSnapshot() {
         };
       }),
       doors: Array.from(room.doors.entries()).map(([key, value]) => {
-        const [x, z] = key.split(",").map(Number);
+        const { x, z, level } = parseDoorKey(key);
         return {
           x,
           z,
+          level,
           id: value.id,
           orientation: value.orientation,
           targetRoom: value.targetRoom,
@@ -664,6 +860,14 @@ export function loadProjectSnapshot(project) {
 
     const toGrid = (worldValue, offset) => Math.round(worldValue + offset);
 
+    if (!roomData.player && Array.isArray(room.spawn) && room.spawn.length >= 3) {
+      const spawnX = toGrid(room.spawn[0], xOffset);
+      const spawnZ = toGrid(room.spawn[2], zOffset);
+      if (Number.isFinite(spawnX) && Number.isFinite(spawnZ)) {
+        room.player = { x: spawnX, z: spawnZ };
+      }
+    }
+
     (roomData.blocks ?? []).forEach((block) => {
       const worldPos = block.position;
       const x = typeof block?.x === "number" ? block.x : Array.isArray(worldPos) ? toGrid(worldPos[0], xOffset) : null;
@@ -673,8 +877,14 @@ export function loadProjectSnapshot(project) {
       }
 
       const tileOverrides = resolveTileOverrideIds(block.tiles);
-      room.blocks.set(keyOf(x, z), {
-        height: block.height ?? 1,
+      const sizeY = Array.isArray(block.size) ? Number(block.size[1]) || 1 : Number(block.height) || 1;
+      const centerY = Array.isArray(worldPos) ? Number(worldPos[1]) || sizeY / 2 : Number(block.centerY) || sizeY / 2;
+      const inferredLevel = normalizeBlockLevel(
+        typeof block.level === "number" ? block.level : Math.round(centerY - sizeY / 2),
+      );
+      room.blocks.set(blockKeyOf(x, z, inferredLevel), {
+        level: inferredLevel,
+        height: sizeY,
         material: block.material,
         tiles: tileOverrides,
         presetId: block.presetId ?? null,
@@ -690,7 +900,14 @@ export function loadProjectSnapshot(project) {
       }
 
       const tileOverrides = resolveTileOverrideIds(crate.tiles);
-      room.crates.set(keyOf(x, z), {
+      const sizeY = Array.isArray(crate.size) ? Number(crate.size[1]) || CRATE_SIZE : CRATE_SIZE;
+      const centerY = Array.isArray(worldPos) ? Number(worldPos[1]) || sizeY / 2 : sizeY / 2;
+      const inferredLevel = normalizeBlockLevel(
+        typeof crate.level === "number" ? crate.level : Math.round(centerY - sizeY / 2),
+      );
+      room.crates.set(blockKeyOf(x, z, inferredLevel), {
+        level: inferredLevel,
+        height: sizeY,
         presetId: crate.presetId ?? null,
         tiles: tileOverrides,
       });
@@ -703,11 +920,31 @@ export function loadProjectSnapshot(project) {
       if (x === null || z === null) {
         return;
       }
-      room.objects.set(keyOf(x, z), {
+      const definition = getModelDefinition(object.presetId ?? object.id ?? null);
+      const resolvedSize = Array.isArray(object.size)
+        ? object.size.map((value) => Number(value) || 0)
+        : definition?.size
+        ? [...definition.size]
+        : [1, 1, 1];
+      while (resolvedSize.length < 3) {
+        resolvedSize.push(1);
+      }
+      const sizeY = resolvedSize[1] ?? 1;
+      const centerY = Array.isArray(worldPos)
+        ? Number(worldPos[1]) || sizeY / 2
+        : typeof object.height === "number"
+        ? object.height
+        : sizeY / 2;
+      const inferredLevel = normalizeBlockLevel(
+        typeof object.level === "number" ? object.level : Math.round(centerY - sizeY / 2),
+      );
+      room.objects.set(blockKeyOf(x, z, inferredLevel), {
+        level: inferredLevel,
         presetId: object.presetId ?? object.id ?? null,
         rotation: object.rotation ?? 0,
-        height: object.height ?? (Array.isArray(worldPos) ? worldPos[1] : 0),
+        height: centerY,
         state: object.state ?? null,
+        size: resolvedSize,
       });
     });
 
@@ -718,11 +955,16 @@ export function loadProjectSnapshot(project) {
       if (x === null || z === null) {
         return;
       }
-      room.lights.set(keyOf(x, z), {
+      const height = Array.isArray(worldPos) ? Number(worldPos[1]) || 2 : Number(light.height) || 2;
+      const inferredLevel = normalizeBlockLevel(
+        typeof light.level === "number" ? light.level : Math.max(0, Math.floor(height - 1)),
+      );
+      room.lights.set(blockKeyOf(x, z, inferredLevel), {
+        level: inferredLevel,
         presetId: light.presetId ?? light.id ?? null,
         color: light.color ?? light.hex ?? "#ffffff",
         intensity: light.intensity ?? 1,
-        height: light.height ?? (Array.isArray(worldPos) ? worldPos[1] : 2),
+        height,
       });
     });
 
@@ -735,7 +977,16 @@ export function loadProjectSnapshot(project) {
       }
       const doorId = door.id ?? `door-${roomId}-${x}-${z}`;
       const target = door.target ?? {};
-      room.doors.set(keyOf(x, z), {
+      const frameHeight = Array.isArray(door.size) ? Number(door.size[1]) || DEFAULT_DOOR_HEIGHT : DEFAULT_DOOR_HEIGHT;
+      const centerY = Array.isArray(worldPos)
+        ? Number(worldPos[1]) || frameHeight / 2
+        : typeof door.centerY === "number"
+        ? door.centerY
+        : (door.level ?? 0) + frameHeight / 2;
+      const inferredLevel = normalizeBlockLevel(
+        typeof door.level === "number" ? door.level : Math.round(centerY - frameHeight / 2),
+      );
+      room.doors.set(doorKeyOf(x, z, inferredLevel), {
         id: doorId,
         orientation: door.orientation ?? "north",
         targetRoom: door.targetRoom ?? target.room ?? "",
@@ -745,6 +996,7 @@ export function loadProjectSnapshot(project) {
         material: door.material ?? "door",
         spawnId: door.spawnId ?? `${doorId}-spawn`,
         targetSpawnId: door.targetSpawnId ?? target.spawnId ?? "",
+        level: inferredLevel,
       });
     });
 
@@ -774,6 +1026,13 @@ export function loadProjectSnapshot(project) {
         }
       });
     }
+
+    const ambientSource = roomData.ambientLight ?? roomData.ambient ?? {};
+    room.ambientColor = normalizeHexColor(ambientSource.color, room.ambientColor ?? "#ffffff");
+    room.ambientIntensity = clampAmbientIntensity(
+      ambientSource.intensity ?? room.ambientIntensity ?? 0.65,
+      room.ambientIntensity ?? 0.65,
+    );
 
     if (roomData.player) {
       const worldPos = roomData.player.position ?? roomData.player;
@@ -984,4 +1243,99 @@ function generateUniqueRoomId(base) {
     candidate = `${base}-${counter++}`;
   }
   return candidate;
+}
+
+function blockKeyOf(x, z, level = DEFAULT_BLOCK_LEVEL) {
+  return `${x},${z},${level}`;
+}
+
+function parseBlockKey(key) {
+  const [xStr, zStr, levelStr] = key.split(",");
+  const x = Number(xStr);
+  const z = Number(zStr);
+  const levelNumeric = Number(levelStr);
+  return {
+    x,
+    z,
+    level: normalizeBlockLevel(Number.isFinite(levelNumeric) ? levelNumeric : DEFAULT_BLOCK_LEVEL),
+  };
+}
+
+function doorKeyOf(x, z, level = DEFAULT_BLOCK_LEVEL) {
+  return blockKeyOf(x, z, level);
+}
+
+function parseDoorKey(key) {
+  return parseBlockKey(key);
+}
+
+function normalizeBlockLevel(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_BLOCK_LEVEL;
+  }
+  return Math.max(0, Math.floor(numeric));
+}
+
+function deleteBlocksAtTile(room, x, z, level = null) {
+  return deleteEntriesAtTile(room.blocks, x, z, level);
+}
+
+function deleteCratesAtTile(room, x, z, level = null) {
+  return deleteEntriesAtTile(room.crates, x, z, level);
+}
+
+function deleteObjectsAtTile(room, x, z, level = null) {
+  return deleteEntriesAtTile(room.objects, x, z, level);
+}
+
+function deleteLightsAtTile(room, x, z, level = null) {
+  return deleteEntriesAtTile(room.lights, x, z, level);
+}
+
+function deleteDoorsAtTile(room, x, z, level = null) {
+  return deleteEntriesAtTile(room.doors, x, z, level);
+}
+
+function deleteEntriesAtTile(map, x, z, level = null) {
+  const keysToRemove = [];
+  map.forEach((_, key) => {
+    const info = parseBlockKey(key);
+    if (info.x === x && info.z === z && (level === null || info.level === level)) {
+      keysToRemove.push(key);
+    }
+  });
+  keysToRemove.forEach((key) => map.delete(key));
+  return keysToRemove.length;
+}
+
+function normalizeHexColor(value, fallback = "#ffffff") {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  let hex = value.trim();
+  if (!hex) {
+    return fallback;
+  }
+  if (!hex.startsWith("#")) {
+    hex = `#${hex}`;
+  }
+  if (/^#([0-9a-fA-F]{3})$/.test(hex)) {
+    const [, rgb] = hex.match(/^#([0-9a-fA-F]{3})$/) || [];
+    if (rgb) {
+      hex = `#${rgb[0]}${rgb[0]}${rgb[1]}${rgb[1]}${rgb[2]}${rgb[2]}`;
+    }
+  }
+  if (/^#([0-9a-fA-F]{6})$/.test(hex)) {
+    return hex.toLowerCase();
+  }
+  return fallback;
+}
+
+function clampAmbientIntensity(value, fallback = 0.65) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return Math.min(4, Math.max(0, numeric));
+  }
+  return Math.min(4, Math.max(0, Number(fallback) || 0.65));
 }

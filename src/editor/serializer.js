@@ -1,6 +1,7 @@
 import { computeDoorDefinition } from "../data/doorRuntime.js";
 import { resolveFaceTiles, getDefaultPresetIdForUsage } from "../data/blockPresets.js";
 import { getTileById } from "../data/tiles.js";
+import { getModelDefinition } from "../data/models.js";
 
 const TILE_SIZE = 1;
 const FLOOR_HEIGHT = 0.125;
@@ -35,15 +36,18 @@ export function buildRoomDefinition(snapshot) {
     z: (z - zOffset) * TILE_SIZE,
   });
 
-  const solidBlocks = blocks.map(({ x, z, height, material, tiles, presetId }) => {
+  const solidBlocks = blocks.map(({ x, z, height, material, tiles, presetId, level }) => {
     const { x: worldX, z: worldZ } = toWorldPosition(x, z);
-    const blockHeight = Math.max(1, Math.min(3, height));
+    const blockHeight = Math.max(0.25, Math.min(5, height ?? 1));
+    const baseLevel = typeof level === "number" ? level : 0;
+    const centerY = baseLevel + blockHeight / 2;
     const faceTiles = buildFaceTileDescriptors(tiles, presetId);
     const entry = {
-      position: [worldX, blockHeight / 2, worldZ],
+      position: [worldX, centerY, worldZ],
       size: [1, blockHeight, 1],
       material: material ?? presetId ?? "block",
       presetId: presetId ?? null,
+      level: baseLevel,
     };
     if (faceTiles) {
       entry.tiles = faceTiles;
@@ -51,36 +55,56 @@ export function buildRoomDefinition(snapshot) {
     return entry;
   });
 
-  const crateEntries = crates.map(({ x, z, material, tiles, presetId }) => {
+  const crateEntries = crates.map(({ x, z, material, tiles, presetId, level, height }) => {
     const { x: worldX, z: worldZ } = toWorldPosition(x, z);
     const faceTiles = buildFaceTileDescriptors(tiles, presetId);
+    const crateLevel = Math.max(0, Number(level) || 0);
+    const crateHeight = Math.max(0.25, Number(height) || CRATE_SIZE);
+    const centerY = crateLevel + crateHeight / 2;
     return {
-      position: [worldX, CRATE_SIZE / 2, worldZ],
-      size: [CRATE_SIZE, CRATE_SIZE, CRATE_SIZE],
+      position: [worldX, centerY, worldZ],
+      size: [CRATE_SIZE, crateHeight, CRATE_SIZE],
       material: material ?? presetId ?? "crate",
       presetId: presetId ?? null,
       tiles: faceTiles ?? undefined,
+      level: crateLevel,
     };
   });
 
-  const objectEntries = (objects ?? []).map(({ x, z, presetId, rotation, height }) => {
+  const objectEntries = (objects ?? []).map(({ x, z, presetId, rotation, height, size, level, state }) => {
     const { x: worldX, z: worldZ } = toWorldPosition(x, z);
-    const centerY = height ?? 0;
+    const definition = presetId ? getModelDefinition(presetId) : null;
+    const fallbackSize = definition?.size ?? [1, 1, 1];
+    const resolvedSize = Array.isArray(size) && size.length >= 3 ? size.map((value) => Number(value) || 0) : [...fallbackSize];
+    if (resolvedSize.length < 3) {
+      while (resolvedSize.length < 3) {
+        resolvedSize.push(1);
+      }
+    }
+    const sizeY = resolvedSize[1] ?? 1;
+    const inferredLevel = Math.max(0, Number(level) || Math.round((height ?? sizeY / 2) - sizeY / 2) || 0);
+    const centerY = height ?? inferredLevel + sizeY / 2;
     return {
       position: [worldX, centerY, worldZ],
-      size: [1, 1, 1],
+      size: resolvedSize,
       presetId: presetId ?? null,
       rotation: rotation ?? 0,
+      level: inferredLevel,
+      state: state ?? null,
     };
   });
 
-  const lightEntries = (lights ?? []).map(({ x, z, presetId, color, intensity, height }) => {
+  const lightEntries = (lights ?? []).map(({ x, z, presetId, color, intensity, height, level }) => {
     const { x: worldX, z: worldZ } = toWorldPosition(x, z);
+    const inferredLevel = Math.max(0, Number(level) || Math.max(0, Math.floor((height ?? 2) - 1)));
+    const resolvedHeight = height ?? inferredLevel + 2;
     return {
-      position: [worldX, height ?? 2, worldZ],
+      position: [worldX, resolvedHeight, worldZ],
       presetId: presetId ?? null,
       color: color ?? "#ffffff",
       intensity: intensity ?? 1,
+      height: resolvedHeight,
+      level: inferredLevel,
       type: "point",
     };
   });
@@ -97,8 +121,8 @@ export function buildRoomDefinition(snapshot) {
 
   const walls = createWalls(width, depth, resolvedWallHeight, resolvedWallThickness);
 
-  const doorEntries = doors.map((door) =>
-    computeDoorDefinition(
+  const doorEntries = doors.map((door) => {
+    const definition = computeDoorDefinition(
       {
         ...door,
       },
@@ -107,8 +131,20 @@ export function buildRoomDefinition(snapshot) {
         depth,
         tileSize: TILE_SIZE,
       },
-    ),
-  );
+    );
+    definition.level = door.level ?? 0;
+    return definition;
+  });
+
+  let playerEntry = null;
+  if (snapshot.player && typeof snapshot.player.x === "number" && typeof snapshot.player.z === "number") {
+    const { x: worldPlayerX, z: worldPlayerZ } = toWorldPosition(snapshot.player.x, snapshot.player.z);
+    playerEntry = {
+      x: snapshot.player.x,
+      z: snapshot.player.z,
+      position: [worldPlayerX, PLAYER_SPAWN_Y, worldPlayerZ],
+    };
+  }
 
   return {
     name: roomId ?? "editor-room",
@@ -124,6 +160,11 @@ export function buildRoomDefinition(snapshot) {
     objects: objectEntries,
     lights: lightEntries,
     doors: doorEntries,
+    ambientLight: {
+      color: snapshot.ambient?.color ?? "#ffffff",
+      intensity: snapshot.ambient?.intensity ?? 0.65,
+    },
+    ...(playerEntry ? { player: playerEntry } : {}),
   };
 }
 

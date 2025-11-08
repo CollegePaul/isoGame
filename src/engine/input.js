@@ -8,6 +8,7 @@ const KEY_MAP = {
   KeyA: "left",
   KeyD: "right",
   Space: "jump",
+  KeyE: "interact",
 };
 
 export function createInputManager(target = window) {
