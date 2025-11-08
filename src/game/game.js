@@ -55,8 +55,8 @@ function normalizeSizeVector(size) {
 
 function snapToGridCenter(position) {
   const snapped = position.clone();
-  snapped.x = Math.round(snapped.x);
-  snapped.z = Math.round(snapped.z);
+  snapped.x = Math.floor(snapped.x) + 0.5;
+  snapped.z = Math.floor(snapped.z) + 0.5;
   return snapped;
 }
 
@@ -202,6 +202,10 @@ export class Game {
     }
 
     const spawnPosition = spawnPoint ?? new Vector3();
+    const playerHalfHeight = this.player.getHalfSize().y;
+    const floorY = Math.round(spawnPosition.y - playerHalfHeight);
+    spawnPosition.y = floorY + playerHalfHeight + 0.01;
+
     this.player.setSpawn(spawnPosition);
     this.player.setPosition(spawnPosition);
     this.player.velocity.set(0, 0, 0);
@@ -657,10 +661,11 @@ Game.prototype.rebuildTeleporterPadInScene = function rebuildTeleporterPadInScen
   const variantId = entry?.metadata?.id ?? entry?.id ?? TELEPORT_PAD_ID;
   const variant = getObjectVariantById(variantId);
   copyVariantOffsetsToEntry(entry, variant);
-  let mesh = entry.mesh ?? state.entity?.mesh ?? null;
-  if (!mesh && variant) {
+  let mesh = null;
+  if (variant) {
     mesh = variant.createInstance();
   }
+
   if (mesh) {
     mesh.traverse?.((node) => {
       if (node.isMesh) {
@@ -678,7 +683,7 @@ Game.prototype.rebuildTeleporterPadInScene = function rebuildTeleporterPadInScen
     mesh.visible = true;
   }
 
-  let entity = state.entity;
+  let entity = null; // Always recreate the entity
   if (!entity) {
     entity = new WorldObject({
       id: entry.id ?? variantId,

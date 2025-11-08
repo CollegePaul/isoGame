@@ -1,7 +1,7 @@
 import { Box3, Vector3 } from "three";
 import { CollisionLayer } from "../physics/collisionGroups.js";
 
-const PLAYER_SIZE = new Vector3(0.9, 0.9, 0.9);
+const PLAYER_SIZE = new Vector3(0.7, 0.9, 0.7);
 const MOVE_SPEED = 4;
 const JUMP_VELOCITY = 8;
 const GRAVITY = -18;
